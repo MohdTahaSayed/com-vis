@@ -18,6 +18,8 @@ Returns per side: coefficients, pixels used, and confidence.
 
 from __future__ import annotations
 
+import warnings
+
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -62,22 +64,15 @@ class LaneFitter:
         self.cfg = cfg
 
     # ------------------------------------------------------------------
-    def _histogram_base(
-        self,
-        mask: np.ndarray,
-        override_left: Optional[int] = None,
-        override_right: Optional[int] = None
-    ) -> Tuple[int, int]:
+    def _histogram_base(self, mask: np.ndarray) -> Tuple[int, int]:
         """
-        If overrides provided (from Hough), use them.
-        Otherwise fall back to column-histogram peaks in left/right halves.
+        Find starting x positions for left and right lane markings.
+
+        Left search: 0% to 45% of frame width.
+        Right search: 55% to 100% of frame width.
         """
 
         h, w = mask.shape[:2]
-
-        # Use externally supplied bases from Hough
-        if override_left is not None and override_right is not None:
-            return int(override_left), int(override_right)
 
         # Use bottom band where lane paint is dense
         bottom = mask[int(h * 0.70):, :]
@@ -90,8 +85,11 @@ class LaneFitter:
         hist = np.convolve(hist, k, mode="same")
 
         # Search regions
-        left_lo, left_hi = 0, int(0.45 * w)
-        right_lo, right_hi = int(0.55 * w), w
+        left_lo = 0
+        left_hi = int(0.45 * w)
+
+        right_lo = int(0.55 * w)
+        right_hi = w
 
         left_seg = hist[left_lo:left_hi]
         right_seg = hist[right_lo:right_hi]
@@ -129,7 +127,6 @@ class LaneFitter:
         h, w = mask.shape[:2]
 
         n = self.cfg.n_windows
-
         win_w = max(
             20,
             int(self.cfg.window_width_frac * w)
@@ -142,7 +139,7 @@ class LaneFitter:
 
         current_x = x_base
 
-        collected: List[Tuple[int, int]] = []
+        collected: List[np.ndarray] = []
 
         for i in range(n):
 
@@ -167,12 +164,14 @@ class LaneFitter:
             if len(xs) < self.cfg.min_pixels_per_window:
                 continue
 
-            # Recenter using median x
-            current_x = int(np.median(xs))
+            # Only recenter if we have enough pixels to trust the median
+            if len(xs) >= self.cfg.min_pixels_to_recenter:
+                current_x = int(np.median(xs))
 
-            # Store pixels
-            for x, y in zip(xs.tolist(), ys.tolist()):
-                collected.append((x, y))
+            # Store pixels for this window
+            collected.append(
+                np.stack([xs, ys], axis=1).astype(np.int32)
+            )
 
         if not collected:
             return np.zeros(
@@ -180,10 +179,7 @@ class LaneFitter:
                 dtype=np.int32
             )
 
-        return np.array(
-            collected,
-            dtype=np.int32
-        )
+        return np.concatenate(collected, axis=0)
 
     # ------------------------------------------------------------------
     def _fit_poly(
@@ -207,12 +203,9 @@ class LaneFitter:
         y = pixels[:, 1].astype(np.float64)
 
         try:
-            coeffs = np.polyfit(
-                y,
-                x,
-                deg=2
-            )
-
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                coeffs = np.polyfit(y, x, deg=2)
         except (np.linalg.LinAlgError, ValueError):
             return None, float("inf")
 
@@ -241,16 +234,11 @@ class LaneFitter:
     # ------------------------------------------------------------------
     def fit(
         self,
-        mask: np.ndarray,
-        base_left: Optional[int] = None,
-        base_right: Optional[int] = None
+        mask: np.ndarray
     ) -> Tuple[FitResult, FitResult]:
 
         """
         Run fitting on both lane sides.
-
-        Optional base_left and base_right can be supplied
-        externally, for example from Hough line detection.
 
         Returns:
             (left_result, right_result)
@@ -259,11 +247,7 @@ class LaneFitter:
         h, w = mask.shape[:2]
 
         # Starting positions
-        x_left_base, x_right_base = self._histogram_base(
-            mask,
-            override_left=base_left,
-            override_right=base_right
-        )
+        x_left_base, x_right_base = self._histogram_base(mask)
 
         # Sliding window search
         left_pixels = self._sliding_window(
@@ -291,6 +275,9 @@ class LaneFitter:
         ) -> float:
 
             if rms == float("inf"):
+                return 0.0
+
+            if self.cfg.min_pixels_total <= 0:
                 return 0.0
 
             return float(
@@ -469,7 +456,7 @@ class LaneFitter:
             (8, 48),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.55,
-            (0, 100, 255),
+            (0, 255, 0),
             1,
             cv2.LINE_AA
         )
