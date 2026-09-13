@@ -1,0 +1,144 @@
+# =====================================================================
+# Lane Analytics — default configuration
+# =====================================================================
+
+video:
+  width: 720
+  height: 576
+  fps: 25
+  sample_hz: 1
+
+# ---------------------------------------------------------------------
+# Fixed lens artifact (static bbox).
+# ---------------------------------------------------------------------
+artifact_mask:
+  enabled: true
+  x1: 0.64
+  y1: 0.60
+  x2: 0.75
+  y2: 0.72
+
+# ---------------------------------------------------------------------
+# Horizon detection.
+# ---------------------------------------------------------------------
+horizon:
+  enabled: true
+  search_top_frac: 0.30
+  search_bot_frac: 0.75
+  variance_threshold: 60.0
+  run_length: 8
+  smoothing_alpha: 0.25
+  min_y_frac: 0.35
+  max_y_frac: 0.65
+
+# ---------------------------------------------------------------------
+# HSV — used only for reinforcement inside the Canny pipeline.
+# ---------------------------------------------------------------------
+lane_color:
+  white:
+    h_min: 0
+    h_max: 179
+    s_min: 0
+    s_max: 100
+    v_min: 80
+    v_max: 255
+  yellow:
+    enabled: false
+    h_min: 10
+    h_max: 40
+    s_min: 60
+    s_max: 255
+    v_min: 100
+    v_max: 255
+
+# ---------------------------------------------------------------------
+# Canny edge detection — PRIMARY lane signal.
+# ---------------------------------------------------------------------
+canny:
+  enabled: true
+  blur_kernel: 5
+  low_threshold: 50
+  high_threshold: 150
+
+# ---------------------------------------------------------------------
+# Hough + slope classification.
+# ---------------------------------------------------------------------
+hough:
+  enabled: true
+  rho: 1.0
+  theta_deg: 1.0
+  threshold: 20
+  min_line_length: 20
+  max_line_gap: 30
+  slope_abs_min: 0.30
+  slope_abs_max: 3.0
+
+# ---------------------------------------------------------------------
+# Connected-component filtering (kept for fallback path).
+# ---------------------------------------------------------------------
+components:
+  min_area_frac: 0.0004
+  max_area_frac: 0.03
+  height_cap_frac: 0.22
+  width_cap_frac: 0.30
+  aspect_ratio_max: 6.0
+  fill_ratio_min: 0.15
+  bottom_relax_frac: 0.25
+  bottom_aspect_ratio_max: 10.0
+  bottom_fill_ratio_min: 0.10
+  bottom_height_cap_frac: 0.50
+  bottom_width_cap_frac: 0.50
+
+# ---------------------------------------------------------------------
+# Trapezoid ROI.
+# ---------------------------------------------------------------------
+roi:
+  enabled: true
+  vertices:
+    - [0.10, 0.90]
+    - [0.30, 0.55]
+    - [0.70, 0.55]
+    - [0.90, 0.90]
+
+# ---------------------------------------------------------------------
+# Sliding-window polynomial fit.
+# ---------------------------------------------------------------------
+sliding_window:
+  n_windows: 9
+  window_width_frac: 0.10
+  min_pixels_to_recenter: 12
+  min_pixels_total: 100
+  min_pixels_per_window: 6
+  max_fit_rms_px: 25.0
+
+# ---------------------------------------------------------------------
+# Geometric validation.
+# ---------------------------------------------------------------------
+validation:
+  max_sweep_frac: 0.60
+  min_lane_width_px: 30
+  max_lane_width_px: 800
+  max_width_variation: 1.0
+
+# ---------------------------------------------------------------------
+# Temporal state machine (Stage 1E).
+# ---------------------------------------------------------------------
+lane_state:
+  hold_frames: 8
+  miss_frames: 20
+  smoothing_alpha: 0.30
+  min_confidence: 0.15
+
+# ---------------------------------------------------------------------
+# Ego position (Stage 2).
+# ---------------------------------------------------------------------
+ego_position:
+  unit: meters
+
+# ---------------------------------------------------------------------
+# Lane-change state machine (Stage 3).
+# ---------------------------------------------------------------------
+lane_change:
+  threshold_frac: 0.50
+  confirm_frames: 15
+  cooldown_frames: 50
