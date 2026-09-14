@@ -1,13 +1,10 @@
 """
-Stage 4 driver: sign detection + tracking.
-
-Samples every Nth frame (default 5) for speed, runs YOLOv8n, tracks
-detections, writes deduplicated signs to signs.csv.
+Stage 4 driver: sign detection + tracking using the Indian YOLOv8n model.
 
 Usage:
     python scripts/test_stage4.py --input data/VBOX0011_Trim.mp4 --outdir outputs/
     python scripts/test_stage4.py --input data/VBOX0011_Trim.mp4 --outdir outputs/ --max-frames 2000
-    python scripts/test_stage4.py --input data/VBOX0011_Trim.mp4 --outdir outputs/ --every 10
+    python scripts/test_stage4.py --input data/VBOX0011_Trim.mp4 --outdir outputs/ --every 5
 """
 from __future__ import annotations
 
@@ -17,12 +14,14 @@ import sys
 import time as _time
 
 import cv2
+import numpy as np
 import yaml
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.sign_detect import SignDetector, SignDetectConfig
 from src.sign_track import SignTracker, SignTrackConfig
+from src.sign_categories import category_of
 from src.csv_writers import SignsCSV
 from src.io_video import VideoReader
 
@@ -40,6 +39,8 @@ def main():
     ap.add_argument("--every", type=int, default=5,
                     help="process every Nth frame (default 5)")
     ap.add_argument("--max-frames", type=int, default=None)
+    ap.add_argument("--debug-video", action="store_true",
+                    help="write a sign-debug video")
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -61,6 +62,13 @@ def main():
     fps = vr.info.fps
     print(f"[info] video fps={fps:.2f}, processing every {args.every}th frame")
 
+    writer_video = None
+    if args.debug_video:
+        vpath = os.path.join(args.outdir, "signs_debug.mp4")
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer_video = cv2.VideoWriter(vpath, fourcc, fps / args.every,
+                                       (int(vr.info.width), int(vr.info.height)))
+
     n_frames = 0
     n_dets = 0
     t0 = _time.time()
@@ -69,21 +77,26 @@ def main():
         n_dets += len(dets)
         tracker.update(idx, ts, dets)
         n_frames += 1
+
+        if writer_video is not None:
+            vis = detector.debug_render(frame, dets)
+            writer_video.write(vis)
+
         if args.max_frames and n_frames >= args.max_frames:
             break
 
-    # flush remaining
+    # flush
     finalized = tracker.finalize()
-
     for tr in finalized:
         writer.row(
-            f"{tr.first_ts:.2f}",
-            tr.first_frame,
-            tr.cls_name,
+            f"{tr.first_ts:.2f}", tr.first_frame,
+            tr.cls_name, category_of(tr.cls_name),
             tr.bbox[0], tr.bbox[1], tr.bbox[2], tr.bbox[3],
             f"{tr.confidence:.2f}",
         )
     writer.close()
+    if writer_video is not None:
+        writer_video.release()
 
     dt = _time.time() - t0
     print()

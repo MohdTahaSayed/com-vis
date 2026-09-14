@@ -1,11 +1,7 @@
 """
-Stage 0 visual verification.
-
-Loads a frame, applies the fixed artifact mask, writes side-by-side PNG:
-    [original + bbox | masked + bbox]
-
+One-shot sign detection on a single frame/image using the trained model.
 Usage:
-    python scripts/test_stage0.py --input data/VBOX0011_Trim.mp4 --frame 100
+    python scripts/test_sign_single.py --image frames/frame_t0040.00_f1000.png
 """
 from __future__ import annotations
 
@@ -14,72 +10,65 @@ import os
 import sys
 
 import cv2
-import numpy as np
 import yaml
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.artifact_mask import ArtifactMask, ArtifactMaskConfig
-from src.io_video import VideoReader, side_by_side
+from src.sign_detect import SignDetector, SignDetectConfig
 
 
-def load_config(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def get_frame(args):
-    if args.image:
-        frame = cv2.imread(args.image)
-        if frame is None:
-            raise FileNotFoundError(f"Image not found: {args.image}")
-        return frame, 0, 0.0
-
-    vr = VideoReader(args.input)
-    if args.time is not None:
-        idx = int(round(args.time * vr.info.fps))
-    else:
-        idx = int(args.frame)
-    frame = vr.read_frame(idx)
-    if frame is None:
-        raise RuntimeError(f"Cannot read frame {idx} from {args.input}")
-    fps = vr.info.fps
-    vr.release()
-    return frame, idx, idx / fps
+def load_yaml(p):
+    with open(p, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", help="path to video")
-    ap.add_argument("--image", help="path to a single PNG/JPG")
-    ap.add_argument("--frame", type=int, default=0)
-    ap.add_argument("--time", type=float, default=None)
+    ap.add_argument("--image", required=True)
     ap.add_argument("--config", default="config/default.yaml")
     ap.add_argument("--outdir", default="outputs")
+    ap.add_argument("--conf", type=float, default=None)
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
+    cfg = load_yaml(args.config)
 
-    cfg = load_config(args.config)
-    am_cfg = ArtifactMaskConfig.from_dict(cfg.get("artifact_mask", {}))
-    mask = ArtifactMask(am_cfg)
+    det_cfg = SignDetectConfig.from_dict(cfg.get("sign_detect", {}))
+    if args.conf is not None:
+        det_cfg.conf_threshold = args.conf
 
-    frame, idx, ts = get_frame(args)
+    frame = cv2.imread(args.image)
+    if frame is None:
+        raise FileNotFoundError(args.image)
 
-    masked = mask.apply(frame)
-    overlay = mask.debug_render(frame, fill=True)
-    masked_vis = mask.debug_render(masked, fill=False)
+    detector = SignDetector(det_cfg)
 
-    row = side_by_side(
-        overlay, masked_vis,
-        label_a=f"orig+bbox (frame {idx}, t={ts:.2f}s)",
-        label_b="after mask",
-    )
+    print(f"[info] image: {args.image}  shape={frame.shape}")
+    print(f"[info] model: {det_cfg.weights}  ({len(detector.class_names)} classes)")
 
-    out_path = os.path.join(args.outdir, "stage0_verify.png")
-    cv2.imwrite(out_path, row)
-    print(f"[info] frame={idx} t={ts:.2f}s  bbox_px={mask._pixel_bbox(frame.shape[1], frame.shape[0])}")
-    print(f"[ok] wrote {out_path}")
+    # Run at very low confidence to see what the model sees at all
+    print(f"\n[low-conf scan at 0.05]")
+    low_cfg = SignDetectConfig.from_dict(vars(det_cfg))
+    low_cfg.conf_threshold = 0.05
+    low_det = SignDetector(low_cfg)
+    low_dets = low_det.detect(frame)
+    if not low_dets:
+        print("  (nothing above 0.05 either)")
+    for d in low_dets:
+        print(f"  {d.cls_name:40s}  conf={d.confidence:.3f}  bbox={d.bbox}")
+
+    # Run at configured threshold
+    dets = detector.detect(frame)
+    print(f"\n[configured conf={det_cfg.conf_threshold}]")
+    if not dets:
+        print("  (nothing above configured threshold)")
+    for d in dets:
+        print(f"  {d.cls_name:40s}  conf={d.confidence:.3f}  bbox={d.bbox}")
+
+    vis = detector.debug_render(frame, low_dets)
+    out = os.path.join(args.outdir, "sign_single.png")
+    cv2.imwrite(out, vis)
+    print(f"\n[ok] wrote {out}")
 
 
 if __name__ == "__main__":

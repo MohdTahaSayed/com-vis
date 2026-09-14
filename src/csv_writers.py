@@ -59,5 +59,7 @@ class SignsCSV(CSVWriter):
     def __init__(self, path: str):
         super().__init__(path, [
             "timestamp_s", "frame",
-            "class", "bbox_x1", "bbox_y1", "bbox_x2", "bbox_y2", "confidence",
+            "class", "category",
+            "bbox_x1", "bbox_y1", "bbox_x2", "bbox_y2",
+            "confidence",
         ])

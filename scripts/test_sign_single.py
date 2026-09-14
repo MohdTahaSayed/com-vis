@@ -1,7 +1,7 @@
 """
-One-shot sign detection on a single frame or image.
+One-shot sign detection on a single frame/image using the trained Indian model.
 Usage:
-    python scripts/test_sign_single.py --image frames/frame_t0040.00_f01000.png
+    python scripts/test_sign_single.py --image frames/frame_t0040.00_f1000.png
 """
 from __future__ import annotations
 
@@ -27,8 +27,7 @@ def main():
     ap.add_argument("--image", required=True)
     ap.add_argument("--config", default="config/default.yaml")
     ap.add_argument("--outdir", default="outputs")
-    ap.add_argument("--conf", type=float, default=None,
-                    help="override confidence threshold")
+    ap.add_argument("--conf", type=float, default=None)
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -44,45 +43,32 @@ def main():
 
     detector = SignDetector(det_cfg)
 
-    # --- run detector with a very low threshold to see EVERYTHING ---
-    original_conf = det_cfg.conf_threshold
-    det_cfg.conf_threshold = 0.05     # catch everything
-
-    # direct call to YOLO with low conf to see all classes
-    results = detector.model.predict(
-        source=frame,
-        conf=0.05,
-        iou=det_cfg.iou_threshold,
-        imgsz=det_cfg.imgsz,
-        device=det_cfg.device,
-        verbose=False,
-    )
-
     print(f"[info] image: {args.image}  shape={frame.shape}")
-    print(f"[info] running YOLO with conf=0.05 (show everything)")
-    if results and results[0].boxes is not None and len(results[0].boxes):
-        r = results[0]
-        for i in range(len(r.boxes)):
-            cls_id = int(r.boxes.cls[i].item())
-            cls_name = r.names[cls_id]
-            conf = float(r.boxes.conf[i].item())
-            xyxy = r.boxes.xyxy[i].cpu().numpy().astype(int).tolist()
-            print(f"  detected: class={cls_name} (id={cls_id}) "
-                  f"conf={conf:.3f}  bbox={xyxy}")
-    else:
-        print("  NO DETECTIONS AT ALL at conf=0.05")
+    print(f"[info] model: {det_cfg.weights}  ({len(detector.class_names)} classes)")
 
-    # --- now run at configured threshold, only kept classes ---
-    detector.cfg.conf_threshold = original_conf
+    # --- low-confidence scan to see everything the model finds ---
+    print(f"\n[low-conf scan at conf=0.05]")
+    low_cfg = SignDetectConfig.from_dict(det_cfg.__dict__)
+    low_cfg.conf_threshold = 0.05
+    low_detector = SignDetector(low_cfg)
+    low_dets = low_detector.detect(frame)
+    if not low_dets:
+        print("  (nothing above 0.05 either)")
+    for d in low_dets:
+        print(f"  {d.cls_name:42s}  conf={d.confidence:.3f}  bbox={d.bbox}")
+
+    # --- run at configured threshold ---
     dets = detector.detect(frame)
-    print(f"\n[info] kept-classes detections at conf={original_conf}: {len(dets)}")
+    print(f"\n[configured conf={det_cfg.conf_threshold}]")
+    if not dets:
+        print("  (nothing above configured threshold)")
     for d in dets:
-        print(f"  {d.cls_name} {d.confidence:.3f}  bbox={d.bbox}")
+        print(f"  {d.cls_name:42s}  conf={d.confidence:.3f}  bbox={d.bbox}")
 
-    vis = detector.debug_render(frame, dets)
+    vis = detector.debug_render(frame, low_dets)
     out = os.path.join(args.outdir, "sign_single.png")
     cv2.imwrite(out, vis)
-    print(f"[ok] wrote {out}")
+    print(f"\n[ok] wrote {out}")
 
 
 if __name__ == "__main__":
