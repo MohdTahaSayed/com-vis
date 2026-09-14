@@ -3,7 +3,6 @@ Stage 4 driver: sign detection + tracking using the Indian YOLOv8n model.
 
 Usage:
     python scripts/test_stage4.py --input data/VBOX0011_Trim.mp4 --outdir outputs/
-    python scripts/test_stage4.py --input data/VBOX0011_Trim.mp4 --outdir outputs/ --max-frames 2000
     python scripts/test_stage4.py --input data/VBOX0011_Trim.mp4 --outdir outputs/ --every 5
 """
 from __future__ import annotations
@@ -14,7 +13,6 @@ import sys
 import time as _time
 
 import cv2
-import numpy as np
 import yaml
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -36,11 +34,9 @@ def main():
     ap.add_argument("--input", required=True)
     ap.add_argument("--config", default="config/default.yaml")
     ap.add_argument("--outdir", default="outputs")
-    ap.add_argument("--every", type=int, default=5,
-                    help="process every Nth frame (default 5)")
+    ap.add_argument("--every", type=int, default=5)
     ap.add_argument("--max-frames", type=int, default=None)
-    ap.add_argument("--debug-video", action="store_true",
-                    help="write a sign-debug video")
+    ap.add_argument("--debug-video", action="store_true")
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -85,7 +81,6 @@ def main():
         if args.max_frames and n_frames >= args.max_frames:
             break
 
-    # flush
     finalized = tracker.finalize()
     for tr in finalized:
         writer.row(

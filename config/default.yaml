@@ -156,36 +156,11 @@ sign_detect:
   imgsz: 640
   device: cpu
   min_bbox_px: 20
+  max_bbox_px: 250
   artifact_x1: 0.64
   artifact_y1: 0.60
   artifact_x2: 0.75
   artifact_y2: 0.72
-  use_classical: true
-  classical_shape_cfg:
-    min_bbox_px: 18
-    max_area_frac: 0.15
-    top_reject_frac: 0.15
-    red1_h_min: 0
-    red1_h_max: 12
-    red2_h_min: 168
-    red2_h_max: 179
-    red_s_min: 60
-    red_v_min: 50
-    green_h_min: 40
-    green_h_max: 85
-    green_s_min: 50
-    green_v_min: 50
-    blue_h_min: 100
-    blue_h_max: 130
-    blue_s_min: 120
-    blue_v_min: 80
-    white_s_max: 80
-    white_v_min: 130
-    circle_circularity_min: 0.72
-    rect_aspect_min: 1.2
-    rect_aspect_max: 8.0
-    rect_fill_min: 0.55
-    max_bbox_px: 180
 
 # ---------------------------------------------------------------------
 # Sign tracking (IOU-based, deduplicates per-sign CSV rows).

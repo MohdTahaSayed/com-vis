@@ -4,10 +4,7 @@ Maps sign class names to the three official Indian sign categories:
     - cautionary (warning)      : warning of hazard
     - informatory               : information / direction
 
-Includes both:
-    - The 85 YOLO-trained classes (SDI Indian Traffic Sign dataset)
-    - The classical detector classes (sign_shape.py)
-
+Covers the 85 YOLO-trained classes (SDI Indian Traffic Sign dataset).
 Reference: MoRTH India Road Sign manual + Amrita/Megalingam et al. (2022).
 """
 from __future__ import annotations
@@ -17,7 +14,6 @@ from typing import Dict
 
 # ---- Regulatory (mandatory) signs ----
 _REGULATORY = {
-    # --- YOLO-trained classes ---
     "ALL_MOTOR_VEHICLE_PROHIBITED", "AXLE_LOAD_LIMIT",
     "BULLOCK_AND_HANDCART_PROHIBITED", "BULLOCK_PROHIBITED",
     "COMPULSARY_AHEAD", "COMPULSARY_AHEAD_OR_TURN_LEFT",
@@ -37,14 +33,11 @@ _REGULATORY = {
     "SPEED_LIMIT_60", "SPEED_LIMIT_70", "SPEED_LIMIT_80",
     "STOP", "STRAIGHT_PROHIBITED", "TONGA_PROHIBITED",
     "TRUCK_PROHIBITED", "U_TURN_PROHIBITED", "WIDTH_LIMIT",
-    # --- Classical detector classes ---
-    "red_circle_sign", "blue_circle_sign",
 }
 
 
 # ---- Cautionary (warning) signs ----
 _CAUTIONARY = {
-    # --- YOLO-trained classes ---
     "BARRIER_AHEAD", "CATTLE", "CROSS_ROAD", "CYCLE_CROSSING",
     "DANGEROUS_DIP", "FALLING_ROCKS", "GAP_IN_MEDIAN",
     "GUARDED_LEVEL_CROSSING", "HUMP_OR_ROUGH_ROAD",
@@ -57,17 +50,12 @@ _CAUTIONARY = {
     "SLIPPERY_ROAD", "STAGGERED_INTERSECTION", "STEEP_ASCENT",
     "STEEP_DESCENT", "T_INTERSECTION", "UNGUARDED_LEVEL_CROSSING",
     "Y_INTERSECTION", "TRAFFIC_SIGNAL",
-    # --- Classical detector classes ---
-    "red_triangle_warning", "white_triangle_warning",
 }
 
 
 # ---- Informatory signs ----
 _INFORMATORY = {
-    # --- YOLO-trained classes ---
     "DIRECTION", "FERRY", "PASS_EITHER_SIDE", "ROUNDABOUT", "TURN_RIGHT",
-    # --- Classical detector classes ---
-    "green_directional_sign", "blue_info_sign",
 }
 
 
@@ -89,10 +77,6 @@ def summarize_classes() -> Dict[str, int]:
         "informatory": len(_INFORMATORY),
         "total": len(_REGULATORY) + len(_CAUTIONARY) + len(_INFORMATORY),
     }
-
-
-def all_classes() -> set:
-    return _REGULATORY | _CAUTIONARY | _INFORMATORY
 
 
 if __name__ == "__main__":
