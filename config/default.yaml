@@ -144,8 +144,8 @@ lane_change:
   min_peak_magnitude: 0.25
   cooldown_samples: 10
 
-  # ---------------------------------------------------------------------
-# Sign detection (YOLOv8n, COCO).
+# ---------------------------------------------------------------------
+# Sign detection — YOLOv8n fine-tuned on Indian signs.
 # Scope: traffic signs only. Billboards excluded by design.
 # ---------------------------------------------------------------------
 sign_detect:

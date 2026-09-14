@@ -50,6 +50,7 @@ from src.lane_change import LaneChangeDetector, LaneChangeConfig
 try:
     from src.sign_detect import SignDetector, SignDetectConfig
     from src.sign_track import SignTracker, SignTrackConfig
+    from src.sign_categories import category_of
     _HAVE_SIGNS = True
 except Exception as _e:
     _HAVE_SIGNS = False
@@ -67,12 +68,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True)
     ap.add_argument("--config", default="config/default.yaml")
-    ap.add_argument("--calib", default="config/calibration.yaml",
-                    help="(unused — kept for compatibility)")
     ap.add_argument("--outdir", default="outputs")
     ap.add_argument("--max-frames", type=int, default=None)
-    ap.add_argument("--no-video", action="store_true",
-                    help="skip writing the annotated debug video")
     ap.add_argument("--sign-every", type=int, default=5,
                     help="run sign detector every N frames")
     ap.add_argument("--debug-video", action="store_true",
@@ -180,12 +177,14 @@ def main():
                 xs = l_coeffs[0]*ys*ys + l_coeffs[1]*ys + l_coeffs[2]
                 pts = np.stack([xs, ys], 1).astype(np.int32)
                 pts = pts[(pts[:, 0] >= 0) & (pts[:, 0] < w)]
-                if len(pts) >= 2: cv2.polylines(vis, [pts], False, (0, 255, 255), 3)
+                if len(pts) >= 2:
+                    cv2.polylines(vis, [pts], False, (0, 255, 255), 3)
             if r_coeffs is not None:
                 xs = r_coeffs[0]*ys*ys + r_coeffs[1]*ys + r_coeffs[2]
                 pts = np.stack([xs, ys], 1).astype(np.int32)
                 pts = pts[(pts[:, 0] >= 0) & (pts[:, 0] < w)]
-                if len(pts) >= 2: cv2.polylines(vis, [pts], False, (0, 255, 0), 3)
+                if len(pts) >= 2:
+                    cv2.polylines(vis, [pts], False, (0, 255, 0), 3)
             if sign_trk is not None:
                 vis = sign_trk.debug_render(vis, None)
             txt = f"L={l_status} R={r_status}"
@@ -203,7 +202,8 @@ def main():
     if sign_trk is not None:
         for tr in sign_trk.finalize():
             sign_csv.row(
-                f"{tr.first_ts:.2f}", tr.first_frame, tr.cls_name,
+                f"{tr.first_ts:.2f}", tr.first_frame,
+                tr.cls_name, category_of(tr.cls_name),
                 tr.bbox[0], tr.bbox[1], tr.bbox[2], tr.bbox[3],
                 f"{tr.confidence:.2f}",
             )
