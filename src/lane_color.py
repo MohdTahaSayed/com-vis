@@ -1,16 +1,4 @@
-"""
-Stage 1a: HSV colour thresholding for lane markings.
 
-Two independent masks:
-    - WHITE  : low saturation, high value
-    - YELLOW : narrow hue band around ~20-30 (OpenCV scale)
-
-Output is the BITWISE OR of both.
-
-Design note:
-    This module returns a binary mask. It does NOT decide what is a lane.
-    That is lane_components' job.
-"""
 
 from __future__ import annotations
 

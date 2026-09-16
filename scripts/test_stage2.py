@@ -1,16 +1,4 @@
-"""
-Stage 2 driver: 1 Hz ego-position CSV.
 
-Prof. Maji's spec: camera is at vehicle center → camera position is
-sufficient for "position within lane". We report:
-    offset_px         - signed pixel offset (camera center minus lane center)
-    lane_width_px     - detected lane width at the eval row
-    offset_normalized - offset_px / lane_width_px (position within lane, [-0.5,+0.5])
-
-Usage:
-    python scripts/test_stage2.py --input data/VBOX0011_Trim.mp4 --outdir outputs/
-    python scripts/test_stage2.py --input data/VBOX0011_Trim.mp4 --outdir outputs/ --max-frames 500
-"""
 from __future__ import annotations
 
 import argparse

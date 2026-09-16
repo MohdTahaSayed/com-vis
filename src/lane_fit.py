@@ -1,20 +1,4 @@
-"""
-Stage 1d: Sliding-window search + 2nd-degree polynomial fit, per side.
 
-Algorithm (per side = 'left' or 'right'):
-
-1. From the clean binary lane mask, compute the column histogram in the
-   bottom band of the frame.
-2. Constrain histogram peak search:
-   - Left lane: 0% to 45% of frame width
-   - Right lane: 55% to 100% of frame width
-3. Place N horizontal windows vertically from bottom to top.
-4. Skip windows with too few pixels.
-5. Fit a 2nd-degree polynomial x = a*y^2 + b*y + c.
-6. Reject poor fits using RMS residual.
-
-Returns per side: coefficients, pixels used, and confidence.
-"""
 
 from __future__ import annotations
 

@@ -1,16 +1,4 @@
-"""
-Hough transform on the edge mask + slope-based left/right classification.
 
-Returns two lists of line segments:
-    left_segments  : slope > +slope_abs_min (line goes up-left)
-    right_segments : slope < -slope_abs_min (line goes up-right)
-
-Segments with near-horizontal slope (|slope| < slope_abs_min) or near-
-vertical (|slope| > slope_abs_max) are discarded as noise.
-
-The sliding-window fitter then uses the median x of each side's segments
-as its starting base, instead of histogram peaks.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1,18 +1,4 @@
-"""
-CSV writers for all pipeline outputs.
 
-ego_position.csv columns (per Prof. Maji's spec):
-    timestamp_s       - seconds since video start
-    frame             - frame index
-    offset_px         - ego-x minus lane-center-x, pixels; + = ego right of center
-    lane_width_px     - detected lane width at eval row, pixels
-    offset_normalized - offset_px / lane_width_px (unitless, ~[-0.5,+0.5])
-    confidence        - 0..1 from state machine
-    status            - OK | MISS
-
-Rows are flushed to disk immediately so a killed/crashed run preserves
-whatever was processed.
-"""
 from __future__ import annotations
 
 import csv

@@ -1,12 +1,4 @@
-"""
-Maps sign class names to the three official Indian sign categories:
-    - regulatory (mandatory)    : must obey
-    - cautionary (warning)      : warning of hazard
-    - informatory               : information / direction
 
-Covers the 85 YOLO-trained classes (SDI Indian Traffic Sign dataset).
-Reference: MoRTH India Road Sign manual + Amrita/Megalingam et al. (2022).
-"""
 from __future__ import annotations
 
 from typing import Dict

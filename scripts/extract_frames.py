@@ -1,6 +1,4 @@
-"""Extract frames at given timestamps. Usage:
-    python scripts/extract_frames.py --input data/VBOX0011_Trim.mp4 --timestamps 5 30 120 600 900 1200 1450 --outdir frames/
-"""
+
 import argparse, os, cv2
 
 def main():

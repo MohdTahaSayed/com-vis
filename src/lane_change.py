@@ -1,25 +1,4 @@
-"""
-Stage 3: Lane-change detection — rolling-window algorithm.
 
-Watches offset_normalized = offset_px / lane_width_px over time.
-
-Instead of requiring a sign flip between consecutive samples (too strict
-for gradual lane changes), we track:
-
-    - A rolling window of the last N valid samples
-    - The window's median offset, which suppresses noise
-    - A stable "in-lane state" defined by the sign & magnitude of the median
-    - Transitions between stable states = lane changes
-
-States (based on rolling median of offset_normalized):
-    NEUTRAL  - |median| < lane_state_thresh
-    LEFT     - median <= -lane_state_thresh
-    RIGHT    - median >= +lane_state_thresh
-    UNKNOWN  - not enough valid samples yet
-
-Events fire when we transition LEFT -> RIGHT or RIGHT -> LEFT
-(necessarily passing through NEUTRAL).
-"""
 from __future__ import annotations
 
 from collections import deque

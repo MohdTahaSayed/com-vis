@@ -1,18 +1,4 @@
-"""
-Stage 1 (rebuilt): Canny edge detection as the PRIMARY lane signal.
 
-Pipeline:
-    frame → grayscale → Gaussian blur → Canny
-          → trapezoid ROI (removes sky, trees, billboards, hood)
-          → [optional] HSV white/yellow reinforcement
-          → edge mask (binary)
-
-Why edges instead of HSV-primary:
-    Sky, asphalt, and weathered lane paint share similar HSV ranges.
-    No threshold cleanly separates them.
-    But lane paint produces a sharp intensity transition vs asphalt.
-    Sky/asphalt/grass are smooth. Canny exploits this.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass

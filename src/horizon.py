@@ -1,9 +1,4 @@
-"""
-Horizon detection via row-gradient analysis.
 
-Finds the topmost row above which the image is smooth (sky) and below which
-it is textured (road, vegetation, vehicles).
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass

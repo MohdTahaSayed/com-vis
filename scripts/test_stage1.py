@@ -1,22 +1,4 @@
-"""
-Stage 1 visual verification — hybrid Canny + Hough + polynomial.
 
-Pipeline (per frame):
-    artifact mask
-      → horizon detect
-      → Canny edges
-      → ROI mask
-      → HSV reinforcement
-      → Hough line segments + slope classification (left / right)
-      → sliding-window + 2nd-degree polynomial per side
-      → geometric validation
-
-Hough is used only for segment detection/count sanity.
-Sliding-window base positions always come from the histogram.
-
-Output: 4-panel image
-    [frame + Hough | edge mask (pre-ROI) | edge mask (final) | poly fit]
-"""
 from __future__ import annotations
 
 import argparse

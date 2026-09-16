@@ -1,10 +1,4 @@
-"""
-Stage 1c: Trapezoidal region-of-interest mask.
 
-Keeps only the region where ego-lane markings actually live. Sky, trees,
-billboards, adjacent lanes are erased. Top vertices can be overridden
-per-frame by a detected horizon.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass

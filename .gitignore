@@ -1,7 +1,7 @@
-﻿# Data
-data/*.mp4
-data/*.avi
-data/*.mov
+# Data videos
+data/**/*.mp4
+data/**/*.avi
+data/**/*.mov
 
 # Python
 __pycache__/
@@ -12,14 +12,12 @@ __pycache__/
 venv/
 env/
 
-# Outputs (keep .gitkeep but ignore generated files)
-outputs/*.png
-outputs/*.mp4
-outputs/*.csv
-!outputs/.gitkeep
+# Outputs
+outputs/
+outputs_*/
 
-# Frames (extracted, regenerable)
-frames/*.png
+# Frames
+frames/
 
 # OS
 .DS_Store

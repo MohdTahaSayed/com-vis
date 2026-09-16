@@ -1,20 +1,4 @@
-"""
-Stage 4b: IOU tracker for sign detections.
 
-Same physical sign appears in dozens of consecutive frames. We want ONE CSV
-row per unique sign, not dozens.
-
-Algorithm: greedy IOU tracking with N-frame death:
-    - For each new frame's detections, match to existing tracks by IOU
-    - If matched (IOU >= threshold), update the track, extend its life
-    - Unmatched detections start new tracks
-    - Tracks unseen for >= max_age frames are finalized
-    - A track is 'confirmed' once it has >= min_hits observations
-    - Confirmed tracks are emitted to CSV once (at finalization)
-
-This is the standard SORT-style tracker without Kalman filtering (the
-signs don't move much once detected, so IOU is sufficient).
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

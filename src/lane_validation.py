@@ -1,18 +1,4 @@
-"""
-Stage 1d: Geometric validation of fitted lane polynomials.
 
-A numerically plausible fit can still be nonsense. Reject if:
-
-    1. Curve sweeps too far horizontally across its y-range
-       (looping / S-shape / fold-back).
-    2. Curve exits the canvas by more than a small margin.
-    3. Left & right curves cross each other anywhere in the valid y-range.
-    4. Lane width becomes unreasonable at any y.
-
-Note on perspective: in a forward-facing camera, lane width in pixels
-legitimately varies by 3-5x from the horizon to the bottom of the frame.
-We therefore do NOT check width-variation ratio; only absolute bounds.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass

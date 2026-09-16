@@ -1,22 +1,4 @@
-"""
-Stage 1e: Per-side temporal state machine + exponential smoothing.
 
-Each side (left, right) has INDEPENDENT state:
-
-    OK    - fit was valid on this frame
-    HOLD  - fit failed but we're within hold_frames; reuse last good
-    MISS  - fit failed and hold window exceeded; no output
-
-Rules:
-    - When a valid fit arrives (OK), smooth its polynomial coefficients
-      against the previous OK fit using EMA (alpha).
-    - When a fit fails:
-        - increment fail counter
-        - if fail counter <= hold_frames -> HOLD (emit last good smoothed)
-        - else                           -> MISS (emit None)
-    - On the first successful fit after a MISS, reset smoothing.
-    - Left and right states are NEVER coupled.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass

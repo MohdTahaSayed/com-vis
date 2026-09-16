@@ -1,10 +1,4 @@
-"""
-Stage 3 driver — with reliable per-sample debug output.
 
-Usage:
-    python scripts/test_stage3.py --ego outputs/ego_position.csv --outdir outputs/
-    python scripts/test_stage3.py --ego outputs/ego_position.csv --debug-every 30
-"""
 from __future__ import annotations
 
 import argparse

@@ -1,16 +1,4 @@
-"""
-Stage 4a: Traffic sign detection using the fine-tuned Indian YOLOv8n model.
 
-Model: models/indian_signs.pt
-Classes: 85 Indian traffic signs (SDI Indian Traffic Sign dataset v1)
-Trained on: 6,750 images, 50 epochs, ~1 hour on Tesla T4
-Test metrics: mAP@50 = 0.92, mAP@50-95 = 0.875
-
-The classical HSV+shape detector was evaluated and rejected: on this
-footage it produced predominantly false positives on blue truck surfaces
-and commercial billboards, offering no reliable improvement over the
-trained model. Documented in write-up as a rejected approach.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1,10 +1,4 @@
-"""
-Stage 4 driver: sign detection + tracking using the Indian YOLOv8n model.
 
-Usage:
-    python scripts/test_stage4.py --input data/VBOX0011_Trim.mp4 --outdir outputs/
-    python scripts/test_stage4.py --input data/VBOX0011_Trim.mp4 --outdir outputs/ --every 5
-"""
 from __future__ import annotations
 
 import argparse

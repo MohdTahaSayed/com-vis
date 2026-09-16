@@ -1,11 +1,4 @@
-"""
-Video I/O: reader, 1 Hz sampler, frame overlay utilities.
 
-Design rules:
-    - Always return frames at coded resolution (720x576), never DAR-scaled.
-    - 1 Hz sampling = every 25th frame at 25 fps exactly.
-    - Every module exposes debug_render(frame, state) -> frame.
-"""
 from __future__ import annotations
 
 import os
