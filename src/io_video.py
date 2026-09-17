@@ -22,6 +22,9 @@ class VideoInfo:
 class VideoReader:
     """Thin wrapper around cv2.VideoCapture with fixed-coded-dim semantics."""
 
+    # [FIX] tolerate this many consecutive failed reads before giving up
+    MAX_CONSECUTIVE_FAILS = 60      # ~2 s at 30 fps / 2.4 s at 25 fps
+
     def __init__(self, path: str):
         if not os.path.isfile(path):
             raise FileNotFoundError(f"Video not found: {path}")
@@ -59,22 +62,49 @@ class VideoReader:
 
     def iter_frames(self, start: int = 0, end: Optional[int] = None,
                     step: int = 1) -> Iterator[Tuple[int, float, np.ndarray]]:
-        """Yield (frame_idx, timestamp_s, frame) from start to end."""
+        """
+        Yield (frame_idx, timestamp_s, frame) from start to end.
+
+        [FIX] Tolerates transient read failures:
+          - a failed read increments a counter and advances idx without
+            yielding, so the stream is not killed by a single decode blip
+          - a run of MAX_CONSECUTIVE_FAILS consecutive failures is
+            treated as genuine end-of-stream
+        """
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, int(start))
         idx = start
         end = end if end is not None else self.info.frame_count
+
+        consecutive_fails = 0
+        n_dropped = 0
+
         while idx < end:
             ok, frame = self.cap.read()
+
             if not ok:
-                break
+                consecutive_fails += 1
+                if consecutive_fails >= self.MAX_CONSECUTIVE_FAILS:
+                    # genuine end of stream
+                    break
+                n_dropped += 1
+                idx += 1
+                continue
+
+            consecutive_fails = 0
+
             if (idx - start) % step == 0:
-                yield idx, idx / self.info.fps, frame
+                # [FIX] round to 2 decimals to avoid 905.99 artifacts
+                yield idx, round(idx / self.info.fps, 2), frame
+
             idx += 1
+
+        if n_dropped > 0:
+            print(f"[io_video] WARNING: {n_dropped} frames could not be decoded")
 
     def sample_1hz(self, start: int = 0,
                    end: Optional[int] = None) -> Iterator[Tuple[int, float, np.ndarray]]:
         """Yield every 25th frame = 1 Hz exactly at 25 fps."""
-        step = int(round(self.info.fps))  # 25
+        step = int(round(self.info.fps))
         yield from self.iter_frames(start=start, end=end, step=step)
 
 
@@ -104,7 +134,6 @@ def side_by_side(a: np.ndarray, b: np.ndarray,
                  label_a: str = "A", label_b: str = "B") -> np.ndarray:
     """Concatenate two BGR frames horizontally with labels."""
     if a.shape[0] != b.shape[0]:
-        # pad shorter side to match
         target_h = max(a.shape[0], b.shape[0])
         a = cv2.copyMakeBorder(a, 0, target_h - a.shape[0], 0, 0,
                                cv2.BORDER_CONSTANT, value=(0, 0, 0))

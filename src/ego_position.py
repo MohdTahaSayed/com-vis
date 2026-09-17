@@ -1,26 +1,16 @@
-"""
-Stage 2: Ego position within lane.
 
-Computes lateral offset in pixels first (camera-relative), then uses the
-IPM homography to convert to meters via a bird's-eye-view transform.
-
-The ego reference is frame_width / 2 (camera is at vehicle center).
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import numpy as np
-
-from src.lane_fit import LaneFitter
 
 
 @dataclass
 class EgoConfig:
-    ego_x_frac: float = 0.50        # camera-at-center assumption
-    lane_eval_y_frac: float = 0.85  # y (fraction of frame height) at which we measure offset
-    assumed_lane_width_m: float = 3.5
+    ego_x_frac: float = 0.50
+    lane_eval_y_frac: float = 0.85
 
     @classmethod
     def from_dict(cls, d: Dict) -> "EgoConfig":
@@ -34,8 +24,8 @@ class EgoConfig:
 
 @dataclass
 class EgoMeasurement:
-    offset_px: Optional[float]       # signed; + = ego right of lane center
-    lane_center_x: Optional[float]   # px
+    offset_px: Optional[float]
+    lane_center_x: Optional[float]
     lane_width_px: Optional[float]
     y_eval: int
     valid: bool

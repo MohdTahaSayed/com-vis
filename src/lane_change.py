@@ -29,8 +29,8 @@ class LaneChangeConfig:
 class LaneChangeEvent:
     frame: int
     timestamp_s: float
-    direction: str      # "LEFT" or "RIGHT"
-    magnitude: float    # peak |offset_normalized| during the transition
+    direction: str
+    magnitude: float
 
 
 class LaneChangeDetector:
@@ -44,7 +44,6 @@ class LaneChangeDetector:
         self._cooldown: int = 0
         self._peak_since_transition: float = 0.0
 
-    # ------------------------------------------------------------------
     def _classify(self, median: float) -> str:
         if median <= -self.cfg.lane_state_thresh:
             return "LEFT"
@@ -52,7 +51,6 @@ class LaneChangeDetector:
             return "RIGHT"
         return "NEUTRAL"
 
-    # ------------------------------------------------------------------
     def feed(self,
              frame: int,
              timestamp_s: float,
@@ -61,15 +59,14 @@ class LaneChangeDetector:
         if status != "OK" or offset_norm is None:
             return None
 
+        offset_norm = max(-0.5, min(0.5, float(offset_norm)))
+
         if self._cooldown > 0:
             self._cooldown -= 1
             self._window.append(offset_norm)
             return None
 
         self._window.append(offset_norm)
-        self._peak_since_transition = max(
-            self._peak_since_transition, abs(offset_norm)
-        )
 
         if len(self._window) < self.cfg.window_samples:
             return None
@@ -77,21 +74,33 @@ class LaneChangeDetector:
         med = float(np.median(self._window))
         state = self._classify(med)
 
-        # transition between LEFT and RIGHT (through NEUTRAL)
+        if state in ("LEFT", "RIGHT"):
+            self._peak_since_transition = max(
+                self._peak_since_transition, abs(offset_norm)
+            )
+        else:
+            self._peak_since_transition = 0.0
+
         if (state in ("LEFT", "RIGHT")
                 and self._last_state in ("LEFT", "RIGHT")
                 and state != self._last_state):
             direction = "RIGHT" if state == "RIGHT" else "LEFT"
-            ev = LaneChangeEvent(
-                frame=frame,
-                timestamp_s=timestamp_s,
-                direction=direction,
-                magnitude=float(self._peak_since_transition),
-            )
-            self._cooldown = self.cfg.cooldown_samples
-            self._peak_since_transition = abs(offset_norm)
-            self._last_state = state
-            return ev
+
+            if self._peak_since_transition >= self.cfg.min_peak_magnitude:
+                ev = LaneChangeEvent(
+                    frame=frame,
+                    timestamp_s=timestamp_s,
+                    direction=direction,
+                    magnitude=float(self._peak_since_transition),
+                )
+                self._cooldown = self.cfg.cooldown_samples
+                self._peak_since_transition = abs(offset_norm)
+                self._last_state = state
+                return ev
+            else:
+                self._last_state = state
+                self._peak_since_transition = abs(offset_norm)
+                return None
 
         if state in ("LEFT", "RIGHT"):
             self._last_state = state

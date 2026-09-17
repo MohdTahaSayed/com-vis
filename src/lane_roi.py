@@ -17,7 +17,7 @@ class RoiConfig:
     def from_dict(cls, d: Dict) -> "RoiConfig":
         d = d or {}
         verts = d.get("vertices") or [
-            [0.10, 0.90], [0.32, 0.50], [0.68, 0.50], [0.90, 0.90],
+            [0.10, 0.90], [0.30, 0.55], [0.70, 0.55], [0.90, 0.90],
         ]
         return cls(enabled=bool(d.get("enabled", True)), vertices=verts)
 

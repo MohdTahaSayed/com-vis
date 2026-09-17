@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 import time as _time
 
@@ -11,10 +10,8 @@ import cv2
 import numpy as np
 import yaml
 
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, REPO_ROOT)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# Stage 1
 from src.artifact_mask import ArtifactMask, ArtifactMaskConfig
 from src.horizon import HorizonDetector, HorizonConfig
 from src.lane_color import LaneColor, LaneColorConfig
@@ -24,14 +21,10 @@ from src.lane_fit import LaneFitter, SlidingWindowConfig
 from src.lane_validation import LaneValidation, ValidationConfig
 from src.lane_state import LaneState, StateConfig
 
-# Stage 2
 from src.ego_position import EgoPosition, EgoConfig
 from src.csv_writers import EgoPositionCSV, LaneChangesCSV, SignsCSV
-
-# Stage 3
 from src.lane_change import LaneChangeDetector, LaneChangeConfig
 
-# Stage 4
 try:
     from src.sign_detect import SignDetector, SignDetectConfig
     from src.sign_track import SignTracker, SignTrackConfig
@@ -44,57 +37,22 @@ except Exception as _e:
 from src.io_video import VideoReader
 
 
-def load_yaml(p: str) -> dict:
+def load_yaml(p):
     with open(p, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 
-def normalize_video(src: str, outdir: str) -> str:
-    """Run scripts/normalize_video.py to produce a 720x576@25 input."""
-    os.makedirs(outdir, exist_ok=True)
-    norm_path = os.path.join(
-        outdir,
-        os.path.splitext(os.path.basename(src))[0] + "_720x576_25fps.mp4"
-    )
-    if os.path.isfile(norm_path):
-        print(f"[pipeline] normalized video already exists: {norm_path}")
-        return norm_path
-
-    print(f"[pipeline] normalizing {src} -> {norm_path}")
-    cmd = [
-        sys.executable,
-        os.path.join(REPO_ROOT, "scripts", "normalize_video.py"),
-        "--input", src,
-        "--output", norm_path,
-    ]
-    subprocess.run(cmd, check=True)
-    return norm_path
-
-
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", required=True,
-                    help="any video file")
+    ap.add_argument("--input", required=True)
     ap.add_argument("--config", default="config/default.yaml")
     ap.add_argument("--outdir", default="outputs")
     ap.add_argument("--max-frames", type=int, default=None)
     ap.add_argument("--sign-every", type=int, default=5)
-    ap.add_argument("--debug-video", action="store_true",
-                    help="write annotated.mp4")
-    ap.add_argument("--skip-normalize", action="store_true",
-                    help="assume input is already 720x576@25")
+    ap.add_argument("--debug-video", action="store_true")
     args = ap.parse_args()
 
-    t_start = _time.time()
     os.makedirs(args.outdir, exist_ok=True)
-
-    # ---------- normalize ----------
-    if args.skip_normalize:
-        proc_input = args.input
-    else:
-        proc_input = normalize_video(args.input, args.outdir)
-
-    # ---------- build pipeline ----------
     cfg = load_yaml(args.config)
 
     am = ArtifactMask(ArtifactMaskConfig.from_dict(cfg.get("artifact_mask", {})))
@@ -111,38 +69,38 @@ def main():
         LaneChangeConfig.from_dict(cfg.get("lane_change", {}))
     )
 
+    MIN_CONF = float(cfg.get("lane_state", {}).get("min_confidence", 0.15))
+
     sign_det = None
     sign_trk = None
     if _HAVE_SIGNS and cfg.get("sign_detect", {}).get("enabled", True):
         try:
             sign_det = SignDetector(SignDetectConfig.from_dict(cfg.get("sign_detect", {})))
             sign_trk = SignTracker(SignTrackConfig.from_dict(cfg.get("sign_track", {})))
-            print("[pipeline] sign detection ENABLED")
+            print("[info] sign detection ENABLED")
         except Exception as e:
             print(f"[warn] sign detector failed to init: {e}")
 
-    # ---------- CSV writers ----------
     ego_csv = EgoPositionCSV(os.path.join(args.outdir, "ego_position.csv"))
     lc_csv = LaneChangesCSV(os.path.join(args.outdir, "lane_changes.csv"))
     sign_csv = SignsCSV(os.path.join(args.outdir, "signs.csv"))
 
-    # ---------- video reader ----------
-    vr = VideoReader(proc_input)
+    vr = VideoReader(args.input)
     fps = vr.info.fps
     sample_step = int(round(fps))
-    print(f"[pipeline] fps={fps:.2f} sample_step={sample_step}")
+    print(f"[info] fps={fps:.2f} sample_step={sample_step}")
 
-    # ---------- writer ----------
     writer = None
     if args.debug_video:
         vpath = os.path.join(args.outdir, "annotated.mp4")
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         writer = cv2.VideoWriter(vpath, fourcc, fps,
                                  (int(vr.info.width), int(vr.info.height)))
-        print(f"[pipeline] writing debug video to {vpath}")
+        print(f"[info] writing debug video to {vpath}")
 
-    # ---------- main loop ----------
+    t0 = _time.time()
     n = 0
+
     for idx, ts, frame in vr.iter_frames(step=1):
         fmasked = am.apply(frame)
         horizon_y = hz.detect(fmasked)
@@ -151,6 +109,7 @@ def main():
         h, w = frame.shape[:2]
         y_range = (int(h * 0.55), int(h * 0.95))
         v = validator.validate(left.coeffs, right.coeffs, y_range, w)
+
         (l_coeffs, l_status, l_conf), (r_coeffs, r_status, r_conf) = state.update(
             left.coeffs if v.left_ok else None,
             left.confidence if v.left_ok else 0.0,
@@ -158,32 +117,41 @@ def main():
             right.confidence if v.right_ok else 0.0,
         )
 
-        # 1 Hz sample
         if idx % sample_step == 0:
             m = ego.compute(l_coeffs, r_coeffs, w, h)
-            off_px = m.offset_px
-            lane_w = m.lane_width_px
-            off_norm = (off_px / lane_w) if (off_px is not None and lane_w) else None
-            conf = float(min(l_conf, r_conf)) if m.valid else 0.0
-            status = "OK" if m.valid else "MISS"
+
+            l_usable = (l_coeffs is not None) and (l_status in ("OK", "HOLD"))
+            r_usable = (r_coeffs is not None) and (r_status in ("OK", "HOLD"))
+            both_usable = l_usable and r_usable
+
+            min_conf = float(min(l_conf, r_conf)) if both_usable else 0.0
+
+            if both_usable and m.valid and min_conf >= MIN_CONF:
+                off_px = m.offset_px
+                lane_w = m.lane_width_px
+                off_norm = (off_px / lane_w) if lane_w else None
+                status = "OK"
+            else:
+                off_px = lane_w = off_norm = None
+                status = "MISS"
+
             ego_csv.row(
                 f"{ts:.2f}", idx,
                 f"{off_px:.2f}" if off_px is not None else "",
                 f"{lane_w:.1f}" if lane_w is not None else "",
                 f"{off_norm:.3f}" if off_norm is not None else "",
-                f"{conf:.2f}", status,
+                f"{min_conf:.2f}", status,
             )
+
             ev = lc_det.feed(idx, ts, off_norm, status)
             if ev is not None:
                 lc_csv.row(f"{ev.timestamp_s:.2f}", ev.frame,
                            ev.direction, f"{ev.magnitude:.3f}")
 
-        # 5 Hz sign detection
         if sign_det is not None and idx % args.sign_every == 0:
             dets = sign_det.detect(frame)
             sign_trk.update(idx, ts, dets)
 
-        # optional debug video
         if writer is not None:
             vis = frame.copy()
             ys = np.linspace(y_range[0], y_range[1], 80)
@@ -212,7 +180,6 @@ def main():
         if args.max_frames and n >= args.max_frames:
             break
 
-    # finalize
     if sign_trk is not None:
         for tr in sign_trk.finalize():
             sign_csv.row(
@@ -227,10 +194,10 @@ def main():
     if writer is not None:
         writer.release()
 
-    dt = _time.time() - t_start
+    dt = _time.time() - t0
     print()
-    print(f"[pipeline] processed {n} frames in {dt:.1f}s ({n/dt:.1f} fps)")
-    print(f"[pipeline] outputs in {os.path.abspath(args.outdir)}")
+    print(f"[done] processed {n} frames in {dt:.1f}s ({n/dt:.1f} fps)")
+    print(f"[done] outputs in {args.outdir}")
 
 
 if __name__ == "__main__":

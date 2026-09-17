@@ -52,12 +52,14 @@ def main():
     state = LaneState(StateConfig.from_dict(cfg.get("lane_state", {})))
     ego = EgoPosition(EgoConfig.from_dict(cfg.get("ego_position", {})))
 
+    MIN_CONF = float(cfg.get("lane_state", {}).get("min_confidence", 0.15))
+
     csv_path = os.path.join(args.outdir, "ego_position.csv")
     csv_writer = EgoPositionCSV(csv_path)
 
     vr = VideoReader(args.input)
     fps = vr.info.fps
-    sample_step = int(round(fps))     # 1 Hz = every 25th frame
+    sample_step = int(round(fps))
     print(f"[info] fps={fps} sample every {sample_step} frames")
 
     n_processed = 0
@@ -79,29 +81,31 @@ def main():
             right.confidence if v.right_ok else 0.0,
         )
 
-        # 1 Hz sampling
         if idx % sample_step == 0:
             m = ego.compute(l_coeffs, r_coeffs, w, h)
-            conf = float(min(l_conf, r_conf)) if m.valid else 0.0
 
-            offset_px = None
-            lane_width_px = None
-            offset_norm = None
-            status = "MISS"
+            l_usable = (l_coeffs is not None) and (l_status in ("OK", "HOLD"))
+            r_usable = (r_coeffs is not None) and (r_status in ("OK", "HOLD"))
+            both_usable = l_usable and r_usable
 
-            if m.valid and m.offset_px is not None and m.lane_width_px:
-                offset_px = m.offset_px
-                lane_width_px = m.lane_width_px
-                offset_norm = offset_px / lane_width_px
+            min_conf = float(min(l_conf, r_conf)) if both_usable else 0.0
+
+            if both_usable and m.valid and min_conf >= MIN_CONF:
+                off_px = m.offset_px
+                lane_w = m.lane_width_px
+                off_norm = (off_px / lane_w) if lane_w else None
                 status = "OK"
+            else:
+                off_px = lane_w = off_norm = None
+                status = "MISS"
 
+            # [FIX] 7-column row, no 'side' column
             csv_writer.row(
                 f"{ts:.2f}", idx,
-                f"{offset_px:.2f}" if offset_px is not None else "",
-                f"{lane_width_px:.1f}" if lane_width_px is not None else "",
-                f"{offset_norm:.3f}" if offset_norm is not None else "",
-                f"{conf:.2f}",
-                status,
+                f"{off_px:.2f}" if off_px is not None else "",
+                f"{lane_w:.1f}" if lane_w is not None else "",
+                f"{off_norm:.3f}" if off_norm is not None else "",
+                f"{min_conf:.2f}", status,
             )
             n_rows += 1
 

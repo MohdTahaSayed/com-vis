@@ -51,8 +51,8 @@ class LaneColorConfig:
                 h_min=int(w.get("h_min", 0)),
                 h_max=int(w.get("h_max", 179)),
                 s_min=int(w.get("s_min", 0)),
-                s_max=int(w.get("s_max", 90)),
-                v_min=int(w.get("v_min", 130)),
+                s_max=int(w.get("s_max", 100)),
+                v_min=int(w.get("v_min", 80)),
                 v_max=int(w.get("v_max", 255)),
                 enabled=bool(w.get("enabled", True)),
             ),
@@ -87,31 +87,21 @@ class LaneColor:
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-        # White mask
         if self.cfg.white.enabled:
             w_lo, w_hi = self.cfg.white.to_arrays()
             white = cv2.inRange(hsv, w_lo, w_hi)
         else:
-            white = np.zeros(
-                frame.shape[:2],
-                dtype=np.uint8
-            )
+            white = np.zeros(frame.shape[:2], dtype=np.uint8)
 
-        # Yellow mask
         if self.cfg.yellow.enabled:
             y_lo, y_hi = self.cfg.yellow.to_arrays()
             yellow = cv2.inRange(hsv, y_lo, y_hi)
         else:
-            yellow = np.zeros(
-                frame.shape[:2],
-                dtype=np.uint8
-            )
+            yellow = np.zeros(frame.shape[:2], dtype=np.uint8)
 
-        # Combine both masks
         union = cv2.bitwise_or(white, yellow)
 
         return white, yellow, union
-
 
     def debug_render(
         self,
@@ -119,19 +109,7 @@ class LaneColor:
         white: np.ndarray,
         yellow: np.ndarray
     ) -> np.ndarray:
-
-        """
-        Overlay:
-        white mask → green tint
-        yellow mask → red tint
-        """
-
         out = frame.copy()
-
-        white_bool = white > 0
-        yellow_bool = yellow > 0
-
-        out[white_bool] = (0, 255, 0)
-        out[yellow_bool] = (0, 0, 255)
-
+        out[white > 0] = (0, 255, 0)
+        out[yellow > 0] = (0, 0, 255)
         return out

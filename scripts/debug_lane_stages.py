@@ -1,0 +1,610 @@
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+
+import cv2
+import numpy as np
+import yaml
+
+# Allow imports from project root
+sys.path.insert(
+    0,
+    os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+)
+
+from src.artifact_mask import ArtifactMask, ArtifactMaskConfig
+from src.horizon import HorizonDetector, HorizonConfig
+from src.lane_color import LaneColor, LaneColorConfig
+from src.lane_roi import LaneROI, RoiConfig
+from src.lane_edges import LaneEdges, CannyConfig
+from src.lane_fit import LaneFitter, SlidingWindowConfig
+from src.io_video import VideoReader
+
+
+def load_config(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def label(img, text):
+    cv2.putText(
+        img, text, (8, 24),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55, (0, 0, 0), 3, cv2.LINE_AA
+    )
+    cv2.putText(
+        img, text, (8, 24),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55, (255, 255, 255), 1, cv2.LINE_AA
+    )
+    return img
+
+
+def draw_histogram(mask, x_left, x_right):
+    """
+    Visualize the exact histogram used by LaneFitter.
+    """
+
+    h, w = mask.shape
+
+    # Same bottom 30% used in lane_fit.py
+    bottom = mask[int(h * 0.70):, :]
+
+    hist = np.sum(bottom > 0, axis=0).astype(np.float32)
+
+    # Same smoothing used by LaneFitter
+    k = np.ones(15, dtype=np.float32) / 15.0
+    hist = np.convolve(hist, k, mode="same")
+
+    canvas_h = 300
+    canvas = np.zeros((canvas_h, w, 3), dtype=np.uint8)
+
+    max_val = max(float(hist.max()), 1.0)
+
+    # Draw histogram
+    for x in range(w):
+        bar_h = int((hist[x] / max_val) * (canvas_h - 30))
+
+        cv2.line(
+            canvas,
+            (x, canvas_h - 1),
+            (x, canvas_h - 1 - bar_h),
+            (255, 255, 255),
+            1
+        )
+
+    # Search regions
+    left_hi = int(0.45 * w)
+    right_lo = int(0.55 * w)
+
+    cv2.line(
+        canvas, (left_hi, 0), (left_hi, canvas_h),
+        (0, 255, 255), 1
+    )
+
+    cv2.line(
+        canvas, (right_lo, 0), (right_lo, canvas_h),
+        (0, 255, 255), 1
+    )
+
+    # Selected bases
+    cv2.line(
+        canvas, (x_left, 0), (x_left, canvas_h),
+        (0, 255, 255), 3
+    )
+
+    cv2.line(
+        canvas, (x_right, 0), (x_right, canvas_h),
+        (0, 255, 0), 3
+    )
+
+    label(
+        canvas,
+        f"Histogram | Left base={x_left} | Right base={x_right}"
+    )
+
+    return canvas
+
+
+def draw_sliding_windows(mask, x_base, side):
+    """
+    Visualize the same 9-window search concept used by LaneFitter.
+    """
+
+    h, w = mask.shape
+
+    n = 9
+    win_w = max(20, int(0.10 * w))
+    win_h = h // n
+
+    # Get all non-zero pixels
+    nonzero_y, nonzero_x = np.nonzero(mask)
+
+    current_x = x_base
+
+    out = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+
+    for i in range(n):
+
+        y_low = h - (i + 1) * win_h
+        y_high = h - i * win_h
+
+        x_low = current_x - win_w // 2
+        x_high = current_x + win_w // 2
+
+        # Draw current window
+        cv2.rectangle(
+            out,
+            (x_low, y_low),
+            (x_high, y_high),
+            (0, 255, 255),
+            2
+        )
+
+        # Find pixels inside window
+        sel = (
+            (nonzero_y >= y_low) &
+            (nonzero_y < y_high) &
+            (nonzero_x >= x_low) &
+            (nonzero_x < x_high)
+        )
+
+        xs = nonzero_x[sel]
+        ys = nonzero_y[sel]
+
+        # Draw collected pixels
+        for x, y in zip(xs, ys):
+            cv2.circle(
+                out,
+                (int(x), int(y)),
+                1,
+                (0, 0, 255),
+                -1
+            )
+
+        # Same recentering rule as actual LaneFitter
+        if len(xs) >= 12:
+            current_x = int(np.median(xs))
+
+        cv2.putText(
+            out,
+            f"W{i + 1}: {len(xs)} px",
+            (max(5, x_low), max(15, y_low + 20)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA
+        )
+
+    label(
+        out,
+        f"Sliding Windows - {side} | base={x_base}"
+    )
+
+    return out
+
+
+def draw_poly_fit(frame, left, right):
+    """
+    Show the actual polynomial fit from LaneFitter.
+    """
+
+    out = frame.copy()
+
+    h, w = frame.shape[:2]
+
+    ys = np.linspace(
+        int(h * 0.55),
+        int(h * 0.95),
+        100
+    )
+
+    # Left polynomial
+    if left.coeffs is not None:
+        xs = (
+            left.coeffs[0] * ys * ys
+            + left.coeffs[1] * ys
+            + left.coeffs[2]
+        )
+
+        pts = np.stack([xs, ys], axis=1).astype(np.int32)
+
+        pts = pts[
+            (pts[:, 0] >= 0) &
+            (pts[:, 0] < w)
+        ]
+
+        if len(pts) >= 2:
+            cv2.polylines(
+                out,
+                [pts],
+                False,
+                (0, 255, 255),
+                3
+            )
+
+    # Right polynomial
+    if right.coeffs is not None:
+        xs = (
+            right.coeffs[0] * ys * ys
+            + right.coeffs[1] * ys
+            + right.coeffs[2]
+        )
+
+        pts = np.stack([xs, ys], axis=1).astype(np.int32)
+
+        pts = pts[
+            (pts[:, 0] >= 0) &
+            (pts[:, 0] < w)
+        ]
+
+        if len(pts) >= 2:
+            cv2.polylines(
+                out,
+                [pts],
+                False,
+                (0, 255, 0),
+                3
+            )
+
+    label(out, "Polynomial Fit")
+
+    return out
+
+
+def make_frame_debug(frame, cfg):
+    # ---------------------------------------------------------
+    # 1. Initialize modules exactly like project
+    # ---------------------------------------------------------
+
+    am = ArtifactMask(
+        ArtifactMaskConfig.from_dict(
+            cfg.get("artifact_mask", {})
+        )
+    )
+
+    hz = HorizonDetector(
+        HorizonConfig.from_dict(
+            cfg.get("horizon", {})
+        )
+    )
+
+    roi = LaneROI(
+        RoiConfig.from_dict(
+            cfg.get("roi", {})
+        )
+    )
+
+    lc = LaneColor(
+        LaneColorConfig.from_dict(
+            cfg.get("lane_color", {})
+        )
+    )
+
+    edges_mod = LaneEdges(
+        CannyConfig.from_dict(
+            cfg.get("canny", {})
+        ),
+        roi,
+        lc,
+        reinforce_with_hsv=True
+    )
+
+    fitter = LaneFitter(
+        SlidingWindowConfig.from_dict(
+            cfg.get("sliding_window", {})
+        )
+    )
+
+    # ---------------------------------------------------------
+    # 2. Artifact masking
+    # ---------------------------------------------------------
+
+    masked = am.apply(frame)
+
+    # ---------------------------------------------------------
+    # 3. Horizon
+    # ---------------------------------------------------------
+
+    horizon_y = hz.detect(masked)
+
+    # ---------------------------------------------------------
+    # 4. Canny + ROI + HSV reinforcement
+    # ---------------------------------------------------------
+
+    edges_roi, edges_raw, hsv_hits = edges_mod.compute(
+        masked,
+        top_y_override=horizon_y
+    )
+
+    # ---------------------------------------------------------
+    # 5. Histogram bases
+    # ---------------------------------------------------------
+
+    x_left, x_right = fitter._histogram_base(edges_roi)
+
+    # ---------------------------------------------------------
+    # 6. Sliding windows
+    # ---------------------------------------------------------
+
+    left_pixels = fitter._sliding_window(
+        edges_roi,
+        x_left
+    )
+
+    right_pixels = fitter._sliding_window(
+        edges_roi,
+        x_right
+    )
+
+    # ---------------------------------------------------------
+    # 7. Polynomial fitting
+    # ---------------------------------------------------------
+
+    left_coeffs, left_rms = fitter._fit_poly(left_pixels)
+    right_coeffs, right_rms = fitter._fit_poly(right_pixels)
+
+    # Create FitResult objects
+    from src.lane_fit import FitResult
+
+    left = FitResult(
+        side="left",
+        coeffs=left_coeffs,
+        pixels=left_pixels,
+        confidence=min(1.0, len(left_pixels) / 100.0),
+        n_pixels=len(left_pixels),
+        x_base=x_left
+    )
+
+    right = FitResult(
+        side="right",
+        coeffs=right_coeffs,
+        pixels=right_pixels,
+        confidence=min(1.0, len(right_pixels) / 100.0),
+        n_pixels=len(right_pixels),
+        x_base=x_right
+    )
+
+    # ---------------------------------------------------------
+    # VISUALIZATIONS
+    # ---------------------------------------------------------
+
+    # A. Original
+    p1 = frame.copy()
+    label(
+        p1,
+        f"Original | horizon={horizon_y}"
+    )
+
+    if horizon_y is not None:
+        cv2.line(
+            p1,
+            (0, horizon_y),
+            (p1.shape[1], horizon_y),
+            (0, 255, 255),
+            2
+        )
+
+    # B. Artifact masked
+    p2 = masked.copy()
+    label(p2, "Artifact Masked")
+
+    # C. Raw Canny
+    p3 = cv2.cvtColor(
+        edges_raw,
+        cv2.COLOR_GRAY2BGR
+    )
+    label(p3, "Canny Raw")
+
+    # D. ROI edges
+    p4 = cv2.cvtColor(
+        edges_roi,
+        cv2.COLOR_GRAY2BGR
+    )
+    label(
+        p4,
+        f"Canny + ROI + HSV | {np.count_nonzero(edges_roi)} px"
+    )
+
+    # E. HSV mask
+    if hsv_hits is not None:
+        p5 = cv2.cvtColor(
+            hsv_hits,
+            cv2.COLOR_GRAY2BGR
+        )
+        label(p5, "HSV Reinforcement Mask")
+    else:
+        p5 = np.zeros_like(p4)
+        label(p5, "HSV Reinforcement: None")
+
+    # F. Histogram
+    p6 = draw_histogram(
+        edges_roi,
+        x_left,
+        x_right
+    )
+
+    # G. Left sliding windows
+    p7 = draw_sliding_windows(
+        edges_roi,
+        x_left,
+        "LEFT"
+    )
+
+    # H. Right sliding windows
+    p8 = draw_sliding_windows(
+        edges_roi,
+        x_right,
+        "RIGHT"
+    )
+
+    # I. Polynomial fit
+    p9 = draw_poly_fit(
+        frame,
+        left,
+        right
+    )
+
+    # ---------------------------------------------------------
+    # Make images same height
+    # ---------------------------------------------------------
+
+    target_h = 300
+
+    panels = []
+
+    for p in [
+        p1, p2, p3, p4,
+        p5, p6, p7, p8, p9
+    ]:
+        panels.append(
+            cv2.resize(
+                p,
+                (int(p.shape[1] * target_h / p.shape[0]),
+                 target_h)
+            )
+        )
+
+    # 3 columns x 3 rows
+    rows = []
+
+    for i in range(0, 9, 3):
+
+        row = np.hstack(
+            panels[i:i + 3]
+        )
+
+        rows.append(row)
+
+    # Make row widths equal
+    max_w = max(r.shape[1] for r in rows)
+
+    fixed_rows = []
+
+    for r in rows:
+
+        if r.shape[1] < max_w:
+
+            r = cv2.copyMakeBorder(
+                r,
+                0, 0,
+                0,
+                max_w - r.shape[1],
+                cv2.BORDER_CONSTANT,
+                value=(0, 0, 0)
+            )
+
+        fixed_rows.append(r)
+
+    final = np.vstack(fixed_rows)
+
+    return final, {
+        "left_base": x_left,
+        "right_base": x_right,
+        "left_pixels": len(left_pixels),
+        "right_pixels": len(right_pixels),
+        "left_rms": left_rms,
+        "right_rms": right_rms,
+        "horizon": horizon_y
+    }
+
+
+def main():
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--input",
+        required=True
+    )
+
+    parser.add_argument(
+        "--times",
+        nargs="+",
+        type=float,
+        default=[30.0, 300.0, 900.0],
+        help="timestamps in seconds"
+    )
+
+    parser.add_argument(
+        "--config",
+        default="config/default.yaml"
+    )
+
+    parser.add_argument(
+        "--outdir",
+        default="outputs/lane_debug"
+    )
+
+    args = parser.parse_args()
+
+    os.makedirs(
+        args.outdir,
+        exist_ok=True
+    )
+
+    cfg = load_config(args.config)
+
+    vr = VideoReader(args.input)
+
+    print()
+    print("======================================")
+    print(" LANЕ STAGE DEBUG")
+    print("======================================")
+    print(f"Video: {args.input}")
+    print(f"FPS:   {vr.info.fps}")
+    print(f"Size:  {vr.info.width}x{vr.info.height}")
+    print()
+
+    for t in args.times:
+
+        frame_idx = int(
+            round(t * vr.info.fps)
+        )
+
+        frame = vr.read_frame(frame_idx)
+
+        if frame is None:
+            print(
+                f"[WARN] Could not read frame at {t}s"
+            )
+            continue
+
+        debug, stats = make_frame_debug(
+            frame,
+            cfg
+        )
+
+        filename = os.path.join(
+            args.outdir,
+            f"lane_debug_{t:.2f}s.png"
+        )
+
+        cv2.imwrite(
+            filename,
+            debug
+        )
+
+        print(
+            f"[OK] t={t:7.2f}s "
+            f"frame={frame_idx:6d} "
+            f"horizon={stats['horizon']} "
+            f"Lbase={stats['left_base']} "
+            f"Rbase={stats['right_base']} "
+            f"Lpx={stats['left_pixels']} "
+            f"Rpx={stats['right_pixels']}"
+        )
+
+        print(f"     -> {filename}")
+
+    vr.release()
+
+    print()
+    print("Done.")
+
+
+if __name__ == "__main__":
+    main()
