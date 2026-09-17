@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -10,7 +9,16 @@ import cv2
 import numpy as np
 import yaml
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# Allow imports from project root
+sys.path.insert(
+    0,
+    os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            ".."
+        )
+    )
+)
 
 from src.artifact_mask import ArtifactMask, ArtifactMaskConfig
 from src.horizon import HorizonDetector, HorizonConfig
@@ -22,182 +30,995 @@ from src.lane_validation import LaneValidation, ValidationConfig
 from src.lane_state import LaneState, StateConfig
 
 from src.ego_position import EgoPosition, EgoConfig
-from src.csv_writers import EgoPositionCSV, LaneChangesCSV, SignsCSV
-from src.lane_change import LaneChangeDetector, LaneChangeConfig
 
-try:
-    from src.sign_detect import SignDetector, SignDetectConfig
-    from src.sign_track import SignTracker, SignTrackConfig
-    from src.sign_categories import category_of
-    _HAVE_SIGNS = True
-except Exception as _e:
-    _HAVE_SIGNS = False
-    print(f"[warn] sign detection disabled: {_e}")
+from src.csv_writers import (
+    EgoPositionCSV,
+    LaneChangesCSV,
+    SignsCSV,
+)
+
+from src.lane_change import (
+    LaneChangeDetector,
+    LaneChangeConfig,
+)
 
 from src.io_video import VideoReader
 
 
-def load_yaml(p):
-    with open(p, "r", encoding="utf-8") as f:
+# ============================================================
+# OPTIONAL SIGN MODULES
+# ============================================================
+
+try:
+
+    from src.sign_detect import (
+        SignDetector,
+        SignDetectConfig,
+    )
+
+    from src.sign_track import (
+        SignTracker,
+        SignTrackConfig,
+    )
+
+    from src.sign_categories import (
+        category_of,
+    )
+
+    HAVE_SIGNS = True
+
+except Exception as e:
+
+    HAVE_SIGNS = False
+
+    print(
+        f"[warn] sign detection disabled: {e}"
+    )
+
+
+# ============================================================
+# CONFIG LOADER
+# ============================================================
+
+def load_yaml(path):
+
+    with open(
+        path,
+        "r",
+        encoding="utf-8",
+    ) as f:
+
         return yaml.safe_load(f) or {}
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--input", required=True)
-    ap.add_argument("--config", default="config/default.yaml")
-    ap.add_argument("--outdir", default="outputs")
-    ap.add_argument("--max-frames", type=int, default=None)
-    ap.add_argument("--sign-every", type=int, default=5)
-    ap.add_argument("--debug-video", action="store_true")
-    args = ap.parse_args()
+# ============================================================
+# DRAW POLYNOMIAL
+# ============================================================
 
-    os.makedirs(args.outdir, exist_ok=True)
-    cfg = load_yaml(args.config)
+def draw_curve(
+    frame,
+    coeffs,
+    y_range,
+    color,
+    thickness=3,
+):
 
-    am = ArtifactMask(ArtifactMaskConfig.from_dict(cfg.get("artifact_mask", {})))
-    hz = HorizonDetector(HorizonConfig.from_dict(cfg.get("horizon", {})))
-    roi = LaneROI(RoiConfig.from_dict(cfg.get("roi", {})))
-    lc = LaneColor(LaneColorConfig.from_dict(cfg.get("lane_color", {})))
-    edges_mod = LaneEdges(CannyConfig.from_dict(cfg.get("canny", {})),
-                          roi, lc, reinforce_with_hsv=True)
-    fitter = LaneFitter(SlidingWindowConfig.from_dict(cfg.get("sliding_window", {})))
-    validator = LaneValidation(ValidationConfig.from_dict(cfg.get("validation", {})))
-    state = LaneState(StateConfig.from_dict(cfg.get("lane_state", {})))
-    ego = EgoPosition(EgoConfig.from_dict(cfg.get("ego_position", {})))
-    lc_det = LaneChangeDetector(
-        LaneChangeConfig.from_dict(cfg.get("lane_change", {}))
+    if coeffs is None:
+        return
+
+    h, w = frame.shape[:2]
+
+    ys = np.linspace(
+        y_range[0],
+        y_range[1],
+        80,
     )
 
-    MIN_CONF = float(cfg.get("lane_state", {}).get("min_confidence", 0.15))
+    xs = (
+        coeffs[0] * ys * ys
+        + coeffs[1] * ys
+        + coeffs[2]
+    )
 
-    sign_det = None
-    sign_trk = None
-    if _HAVE_SIGNS and cfg.get("sign_detect", {}).get("enabled", True):
-        try:
-            sign_det = SignDetector(SignDetectConfig.from_dict(cfg.get("sign_detect", {})))
-            sign_trk = SignTracker(SignTrackConfig.from_dict(cfg.get("sign_track", {})))
-            print("[info] sign detection ENABLED")
-        except Exception as e:
-            print(f"[warn] sign detector failed to init: {e}")
+    pts = np.stack(
+        [xs, ys],
+        axis=1,
+    ).astype(np.int32)
 
-    ego_csv = EgoPositionCSV(os.path.join(args.outdir, "ego_position.csv"))
-    lc_csv = LaneChangesCSV(os.path.join(args.outdir, "lane_changes.csv"))
-    sign_csv = SignsCSV(os.path.join(args.outdir, "signs.csv"))
+    pts = pts[
+        (pts[:, 0] >= 0)
+        & (pts[:, 0] < w)
+        & (pts[:, 1] >= 0)
+        & (pts[:, 1] < h)
+    ]
 
-    vr = VideoReader(args.input)
-    fps = vr.info.fps
-    sample_step = int(round(fps))
-    print(f"[info] fps={fps:.2f} sample_step={sample_step}")
+    if len(pts) >= 2:
 
-    writer = None
-    if args.debug_video:
-        vpath = os.path.join(args.outdir, "annotated.mp4")
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(vpath, fourcc, fps,
-                                 (int(vr.info.width), int(vr.info.height)))
-        print(f"[info] writing debug video to {vpath}")
-
-    t0 = _time.time()
-    n = 0
-
-    for idx, ts, frame in vr.iter_frames(step=1):
-        fmasked = am.apply(frame)
-        horizon_y = hz.detect(fmasked)
-        edges_roi, _, _ = edges_mod.compute(fmasked, top_y_override=horizon_y)
-        left, right = fitter.fit(edges_roi)
-        h, w = frame.shape[:2]
-        y_range = (int(h * 0.55), int(h * 0.95))
-        v = validator.validate(left.coeffs, right.coeffs, y_range, w)
-
-        (l_coeffs, l_status, l_conf), (r_coeffs, r_status, r_conf) = state.update(
-            left.coeffs if v.left_ok else None,
-            left.confidence if v.left_ok else 0.0,
-            right.coeffs if v.right_ok else None,
-            right.confidence if v.right_ok else 0.0,
+        cv2.polylines(
+            frame,
+            [pts],
+            False,
+            color,
+            thickness,
         )
 
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    ap = argparse.ArgumentParser(
+        description="Complete IITB Lane Analytics pipeline"
+    )
+
+    ap.add_argument(
+        "--input",
+        required=True,
+        help="Input video",
+    )
+
+    ap.add_argument(
+        "--config",
+        default="config/default.yaml",
+        help="Configuration YAML",
+    )
+
+    ap.add_argument(
+        "--outdir",
+        default="outputs",
+        help="Output directory",
+    )
+
+    ap.add_argument(
+        "--max-frames",
+        type=int,
+        default=None,
+        help="Optional limit for testing",
+    )
+
+    ap.add_argument(
+        "--sign-every",
+        type=int,
+        default=5,
+        help="Run sign detector every N frames",
+    )
+
+    ap.add_argument(
+        "--debug-video",
+        action="store_true",
+        help="Write annotated debug video",
+    )
+
+    args = ap.parse_args()
+
+    # ========================================================
+    # INITIALIZATION
+    # ========================================================
+
+    os.makedirs(
+        args.outdir,
+        exist_ok=True,
+    )
+
+    cfg = load_yaml(
+        args.config
+    )
+
+    # --------------------------------------------------------
+    # Lane pipeline modules
+    # --------------------------------------------------------
+
+    artifact_mask = ArtifactMask(
+        ArtifactMaskConfig.from_dict(
+            cfg.get(
+                "artifact_mask",
+                {}
+            )
+        )
+    )
+
+    horizon = HorizonDetector(
+        HorizonConfig.from_dict(
+            cfg.get(
+                "horizon",
+                {}
+            )
+        )
+    )
+
+    roi = LaneROI(
+        RoiConfig.from_dict(
+            cfg.get(
+                "roi",
+                {}
+            )
+        )
+    )
+
+    lane_color = LaneColor(
+        LaneColorConfig.from_dict(
+            cfg.get(
+                "lane_color",
+                {}
+            )
+        )
+    )
+
+    edges_module = LaneEdges(
+        CannyConfig.from_dict(
+            cfg.get(
+                "canny",
+                {}
+            )
+        ),
+        roi,
+        lane_color,
+        reinforce_with_hsv=True,
+    )
+
+    fitter = LaneFitter(
+        SlidingWindowConfig.from_dict(
+            cfg.get(
+                "sliding_window",
+                {}
+            )
+        )
+    )
+
+    validator = LaneValidation(
+        ValidationConfig.from_dict(
+            cfg.get(
+                "validation",
+                {}
+            )
+        )
+    )
+
+    state = LaneState(
+        StateConfig.from_dict(
+            cfg.get(
+                "lane_state",
+                {}
+            )
+        )
+    )
+
+    ego = EgoPosition(
+        EgoConfig.from_dict(
+            cfg.get(
+                "ego_position",
+                {}
+            )
+        )
+    )
+
+    lane_change_detector = LaneChangeDetector(
+        LaneChangeConfig.from_dict(
+            cfg.get(
+                "lane_change",
+                {}
+            )
+        )
+    )
+
+    # --------------------------------------------------------
+    # Minimum confidence
+    # --------------------------------------------------------
+
+    MIN_CONF = float(
+        cfg.get(
+            "lane_state",
+            {}
+        ).get(
+            "min_confidence",
+            0.15,
+        )
+    )
+
+    # ========================================================
+    # SIGN DETECTION
+    # ========================================================
+
+    sign_detector = None
+    sign_tracker = None
+
+    if (
+        HAVE_SIGNS
+        and cfg.get(
+            "sign_detect",
+            {}
+        ).get(
+            "enabled",
+            True,
+        )
+    ):
+
+        try:
+
+            sign_detector = SignDetector(
+                SignDetectConfig.from_dict(
+                    cfg.get(
+                        "sign_detect",
+                        {}
+                    )
+                )
+            )
+
+            sign_tracker = SignTracker(
+                SignTrackConfig.from_dict(
+                    cfg.get(
+                        "sign_track",
+                        {}
+                    )
+                )
+            )
+
+            print(
+                "[info] sign detection ENABLED"
+            )
+
+        except Exception as e:
+
+            print(
+                f"[warn] sign detector failed "
+                f"to initialize: {e}"
+            )
+
+    # ========================================================
+    # CSV OUTPUTS
+    # ========================================================
+
+    ego_csv = EgoPositionCSV(
+        os.path.join(
+            args.outdir,
+            "ego_position.csv",
+        )
+    )
+
+    lane_change_csv = LaneChangesCSV(
+        os.path.join(
+            args.outdir,
+            "lane_changes.csv",
+        )
+    )
+
+    sign_csv = SignsCSV(
+        os.path.join(
+            args.outdir,
+            "signs.csv",
+        )
+    )
+
+    # ========================================================
+    # VIDEO
+    # ========================================================
+
+    vr = VideoReader(
+        args.input
+    )
+
+    fps = vr.info.fps
+
+    sample_step = int(
+        round(fps)
+    )
+
+    print()
+    print("=" * 70)
+    print("IITB LANE ANALYTICS PIPELINE")
+    print("=" * 70)
+
+    print(
+        f"video       = {args.input}"
+    )
+
+    print(
+        f"resolution  = "
+        f"{vr.info.width}x{vr.info.height}"
+    )
+
+    print(
+        f"fps         = {fps:.2f}"
+    )
+
+    print(
+        f"frames      = {vr.info.frame_count}"
+    )
+
+    print(
+        f"duration    = "
+        f"{vr.info.duration_s:.2f}s"
+    )
+
+    print(
+        f"ego sample  = every {sample_step} frames"
+    )
+
+    print("=" * 70)
+
+    # ========================================================
+    # DEBUG VIDEO
+    # ========================================================
+
+    writer = None
+
+    if args.debug_video:
+
+        video_path = os.path.join(
+            args.outdir,
+            "annotated.mp4",
+        )
+
+        fourcc = cv2.VideoWriter_fourcc(
+            *"mp4v"
+        )
+
+        writer = cv2.VideoWriter(
+            video_path,
+            fourcc,
+            fps,
+            (
+                int(vr.info.width),
+                int(vr.info.height),
+            ),
+        )
+
+        print(
+            f"[info] debug video:"
+            f" {video_path}"
+        )
+
+    # ========================================================
+    # PROCESSING LOOP
+    # ========================================================
+
+    t0 = _time.time()
+
+    n = 0
+
+    lane_ok_samples = 0
+    lane_miss_samples = 0
+
+    raw_sign_detections = 0
+
+    # --------------------------------------------------------
+    # Every frame
+    # --------------------------------------------------------
+
+    for idx, ts, frame in vr.iter_frames(
+        step=1
+    ):
+
+        # ====================================================
+        # 1. ARTIFACT MASK
+        # ====================================================
+
+        f_masked = artifact_mask.apply(
+            frame
+        )
+
+        # ====================================================
+        # 2. HORIZON
+        # ====================================================
+
+        horizon_y = horizon.detect(
+            f_masked
+        )
+
+        # ====================================================
+        # 3. CANNY + ROI + HSV
+        # ====================================================
+
+        edges_roi, _, _ = (
+            edges_module.compute(
+                f_masked,
+                top_y_override=horizon_y,
+            )
+        )
+
+        # ====================================================
+        # 4. LANE FIT
+        #
+        # IMPORTANT:
+        # Pass the frame to the new fitter.
+        # ====================================================
+
+        left, right = fitter.fit(
+            edges_roi,
+            frame=f_masked,
+        )
+
+        # ====================================================
+        # 5. VALIDATION
+        # ====================================================
+
+        h, w = frame.shape[:2]
+
+        y_range = (
+            int(h * 0.55),
+            int(h * 0.95),
+        )
+
+        validation = validator.validate(
+            left.coeffs,
+            right.coeffs,
+            y_range,
+            w,
+        )
+
+        # ====================================================
+        # 6. TEMPORAL STATE
+        # ====================================================
+
+        (
+            l_coeffs,
+            l_status,
+            l_conf,
+        ), (
+            r_coeffs,
+            r_status,
+            r_conf,
+        ) = state.update(
+
+            left.coeffs
+            if validation.left_ok
+            else None,
+
+            left.confidence
+            if validation.left_ok
+            else 0.0,
+
+            right.coeffs
+            if validation.right_ok
+            else None,
+
+            right.confidence
+            if validation.right_ok
+            else 0.0,
+        )
+
+        # ====================================================
+        # 7. EGO POSITION — 1 Hz
+        # ====================================================
+
         if idx % sample_step == 0:
-            m = ego.compute(l_coeffs, r_coeffs, w, h)
 
-            l_usable = (l_coeffs is not None) and (l_status in ("OK", "HOLD"))
-            r_usable = (r_coeffs is not None) and (r_status in ("OK", "HOLD"))
-            both_usable = l_usable and r_usable
+            measurement = ego.compute(
+                l_coeffs,
+                r_coeffs,
+                w,
+                h,
+            )
 
-            min_conf = float(min(l_conf, r_conf)) if both_usable else 0.0
+            l_usable = (
+                l_coeffs is not None
+                and l_status in (
+                    "OK",
+                    "HOLD",
+                )
+            )
 
-            if both_usable and m.valid and min_conf >= MIN_CONF:
-                off_px = m.offset_px
-                lane_w = m.lane_width_px
-                off_norm = (off_px / lane_w) if lane_w else None
-                status = "OK"
+            r_usable = (
+                r_coeffs is not None
+                and r_status in (
+                    "OK",
+                    "HOLD",
+                )
+            )
+
+            both_usable = (
+                l_usable
+                and r_usable
+            )
+
+            if both_usable:
+
+                min_conf = float(
+                    min(
+                        l_conf,
+                        r_conf,
+                    )
+                )
+
             else:
-                off_px = lane_w = off_norm = None
+
+                min_conf = 0.0
+
+            # ------------------------------------------------
+            # Valid ego measurement
+            # ------------------------------------------------
+
+            if (
+                both_usable
+                and measurement.valid
+                and min_conf >= MIN_CONF
+            ):
+
+                offset_px = (
+                    measurement.offset_px
+                )
+
+                lane_width_px = (
+                    measurement.lane_width_px
+                )
+
+                if (
+                    lane_width_px is not None
+                    and lane_width_px != 0
+                ):
+
+                    offset_normalized = (
+                        offset_px
+                        / lane_width_px
+                    )
+
+                else:
+
+                    offset_normalized = None
+
+                status = "OK"
+
+                lane_ok_samples += 1
+
+            # ------------------------------------------------
+            # Invalid ego measurement
+            # ------------------------------------------------
+
+            else:
+
+                offset_px = None
+                lane_width_px = None
+                offset_normalized = None
+
                 status = "MISS"
 
+                lane_miss_samples += 1
+
+            # ------------------------------------------------
+            # Write ego CSV
+            # ------------------------------------------------
+
             ego_csv.row(
-                f"{ts:.2f}", idx,
-                f"{off_px:.2f}" if off_px is not None else "",
-                f"{lane_w:.1f}" if lane_w is not None else "",
-                f"{off_norm:.3f}" if off_norm is not None else "",
-                f"{min_conf:.2f}", status,
+                f"{ts:.2f}",
+                idx,
+
+                (
+                    f"{offset_px:.2f}"
+                    if offset_px is not None
+                    else ""
+                ),
+
+                (
+                    f"{lane_width_px:.1f}"
+                    if lane_width_px is not None
+                    else ""
+                ),
+
+                (
+                    f"{offset_normalized:.3f}"
+                    if offset_normalized is not None
+                    else ""
+                ),
+
+                f"{min_conf:.2f}",
+
+                status,
             )
 
-            ev = lc_det.feed(idx, ts, off_norm, status)
-            if ev is not None:
-                lc_csv.row(f"{ev.timestamp_s:.2f}", ev.frame,
-                           ev.direction, f"{ev.magnitude:.3f}")
+            # =================================================
+            # 8. LANE CHANGE DETECTION
+            # =================================================
 
-        if sign_det is not None and idx % args.sign_every == 0:
-            dets = sign_det.detect(frame)
-            sign_trk.update(idx, ts, dets)
+            event = lane_change_detector.feed(
+                idx,
+                ts,
+                offset_normalized,
+                status,
+            )
+
+            if event is not None:
+
+                lane_change_csv.row(
+                    f"{event.timestamp_s:.2f}",
+                    event.frame,
+                    event.direction,
+                    f"{event.magnitude:.3f}",
+                )
+
+                print(
+                    f"[LANE CHANGE] "
+                    f"t={event.timestamp_s:.2f}s "
+                    f"direction={event.direction} "
+                    f"magnitude={event.magnitude:.3f}"
+                )
+
+        # ====================================================
+        # 9. SIGN DETECTION
+        # ====================================================
+
+        if (
+            sign_detector is not None
+            and sign_tracker is not None
+            and args.sign_every > 0
+            and idx % args.sign_every == 0
+        ):
+
+            detections = sign_detector.detect(
+                frame
+            )
+
+            raw_sign_detections += len(
+                detections
+            )
+
+            sign_tracker.update(
+                idx,
+                ts,
+                detections,
+            )
+
+        # ====================================================
+        # 10. DEBUG VIDEO
+        # ====================================================
 
         if writer is not None:
+
             vis = frame.copy()
-            ys = np.linspace(y_range[0], y_range[1], 80)
-            if l_coeffs is not None:
-                xs = l_coeffs[0]*ys*ys + l_coeffs[1]*ys + l_coeffs[2]
-                pts = np.stack([xs, ys], 1).astype(np.int32)
-                pts = pts[(pts[:, 0] >= 0) & (pts[:, 0] < w)]
-                if len(pts) >= 2:
-                    cv2.polylines(vis, [pts], False, (0, 255, 255), 3)
-            if r_coeffs is not None:
-                xs = r_coeffs[0]*ys*ys + r_coeffs[1]*ys + r_coeffs[2]
-                pts = np.stack([xs, ys], 1).astype(np.int32)
-                pts = pts[(pts[:, 0] >= 0) & (pts[:, 0] < w)]
-                if len(pts) >= 2:
-                    cv2.polylines(vis, [pts], False, (0, 255, 0), 3)
-            if sign_trk is not None:
-                vis = sign_trk.debug_render(vis, None)
-            txt = f"L={l_status} R={r_status}"
-            cv2.putText(vis, txt, (8, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6, (0, 0, 0), 4, cv2.LINE_AA)
-            cv2.putText(vis, txt, (8, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6, (255, 255, 255), 2, cv2.LINE_AA)
-            writer.write(vis)
+
+            # -----------------------------------------------
+            # Horizon
+            # -----------------------------------------------
+
+            if horizon_y is not None:
+
+                cv2.line(
+                    vis,
+                    (0, horizon_y),
+                    (w, horizon_y),
+                    (0, 255, 255),
+                    2,
+                )
+
+            # -----------------------------------------------
+            # Left lane
+            # -----------------------------------------------
+
+            draw_curve(
+                vis,
+                l_coeffs,
+                y_range,
+                (0, 255, 255),
+                3,
+            )
+
+            # -----------------------------------------------
+            # Right lane
+            # -----------------------------------------------
+
+            draw_curve(
+                vis,
+                r_coeffs,
+                y_range,
+                (0, 255, 0),
+                3,
+            )
+
+            # -----------------------------------------------
+            # Ego centre
+            # -----------------------------------------------
+
+            ego_x = int(
+                0.50 * w
+            )
+
+            cv2.line(
+                vis,
+                (ego_x, int(h * 0.75)),
+                (ego_x, int(h * 0.95)),
+                (255, 0, 0),
+                2,
+            )
+
+            # -----------------------------------------------
+            # Text
+            # -----------------------------------------------
+
+            text_lines = [
+                f"L={l_status} "
+                f"R={r_status}",
+
+                f"Lconf={l_conf:.2f} "
+                f"Rconf={r_conf:.2f}",
+
+                f"frame={idx} "
+                f"t={ts:.2f}s",
+            ]
+
+            for i, text in enumerate(
+                text_lines
+            ):
+
+                y = 25 + i * 23
+
+                cv2.putText(
+                    vis,
+                    text,
+                    (8, y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (0, 0, 0),
+                    4,
+                    cv2.LINE_AA,
+                )
+
+                cv2.putText(
+                    vis,
+                    text,
+                    (8, y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (255, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+
+            # -----------------------------------------------
+            # Sign tracks
+            # -----------------------------------------------
+
+            if sign_tracker is not None:
+
+                vis = sign_tracker.debug_render(
+                    vis,
+                    None,
+                )
+
+            writer.write(
+                vis
+            )
+
+        # ====================================================
+        # FRAME COUNTER
+        # ====================================================
 
         n += 1
-        if args.max_frames and n >= args.max_frames:
+
+        if (
+            args.max_frames is not None
+            and n >= args.max_frames
+        ):
+
             break
 
-    if sign_trk is not None:
-        for tr in sign_trk.finalize():
+    # ========================================================
+    # FINALIZE SIGN TRACKS
+    # ========================================================
+
+    finalized_signs = []
+
+    if sign_tracker is not None:
+
+        finalized_signs = (
+            sign_tracker.finalize()
+        )
+
+        for track in finalized_signs:
+
             sign_csv.row(
-                f"{tr.first_ts:.2f}", tr.first_frame,
-                tr.cls_name, category_of(tr.cls_name),
-                tr.bbox[0], tr.bbox[1], tr.bbox[2], tr.bbox[3],
-                f"{tr.confidence:.2f}",
+
+                f"{track.first_ts:.2f}",
+
+                track.first_frame,
+
+                track.cls_name,
+
+                category_of(
+                    track.cls_name
+                ),
+
+                track.bbox[0],
+                track.bbox[1],
+                track.bbox[2],
+                track.bbox[3],
+
+                f"{track.confidence:.2f}",
             )
+
+    # ========================================================
+    # CLOSE FILES
+    # ========================================================
+
     ego_csv.close()
-    lc_csv.close()
+
+    lane_change_csv.close()
+
     sign_csv.close()
+
+    vr.release()
+
     if writer is not None:
+
         writer.release()
 
+    # ========================================================
+    # FINAL STATISTICS
+    # ========================================================
+
     dt = _time.time() - t0
+
     print()
-    print(f"[done] processed {n} frames in {dt:.1f}s ({n/dt:.1f} fps)")
-    print(f"[done] outputs in {args.outdir}")
+    print("=" * 70)
+    print("PIPELINE COMPLETE")
+    print("=" * 70)
+
+    print(
+        f"frames processed = {n}"
+    )
+
+    print(
+        f"processing time  = {dt:.1f}s"
+    )
+
+    if dt > 0:
+
+        print(
+            f"processing speed = "
+            f"{n / dt:.1f} FPS"
+        )
+
+    print()
+
+    print(
+        f"Ego samples:"
+    )
+
+    print(
+        f"  OK   = {lane_ok_samples}"
+    )
+
+    print(
+        f"  MISS = {lane_miss_samples}"
+    )
+
+    print()
+
+    print(
+        f"Raw sign detections = "
+        f"{raw_sign_detections}"
+    )
+
+    print(
+        f"Confirmed signs     = "
+        f"{len(finalized_signs)}"
+    )
+
+    print()
+
+    print(
+        "Outputs:"
+    )
+
+    print(
+        f"  {os.path.join(args.outdir, 'ego_position.csv')}"
+    )
+
+    print(
+        f"  {os.path.join(args.outdir, 'lane_changes.csv')}"
+    )
+
+    print(
+        f"  {os.path.join(args.outdir, 'signs.csv')}"
+    )
+
+    if writer is not None:
+
+        print(
+            f"  {os.path.join(args.outdir, 'annotated.mp4')}"
+        )
+
+    print("=" * 70)
 
 
 if __name__ == "__main__":

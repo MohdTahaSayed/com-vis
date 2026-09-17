@@ -15,10 +15,8 @@ video:
 
 artifact_mask:
   enabled: true
-
   x1: 0.64
   y1: 0.60
-
   x2: 0.75
   y2: 0.72
 
@@ -29,18 +27,11 @@ artifact_mask:
 
 horizon:
   enabled: true
-
-  # Region in which the horizon detector searches.
   search_top_frac: 0.30
   search_bot_frac: 0.75
-
   variance_threshold: 60.0
   run_length: 8
-
-  # Temporal smoothing of horizon position.
   smoothing_alpha: 0.25
-
-  # Allowed horizon position.
   min_y_frac: 0.35
   max_y_frac: 0.65
 
@@ -50,26 +41,20 @@ horizon:
 # =====================================================================
 
 lane_color:
-
   white:
     h_min: 0
     h_max: 179
-
     s_min: 0
     s_max: 100
-
     v_min: 80
     v_max: 255
 
   yellow:
     enabled: false
-
     h_min: 10
     h_max: 40
-
     s_min: 60
     s_max: 255
-
     v_min: 100
     v_max: 255
 
@@ -80,9 +65,7 @@ lane_color:
 
 canny:
   enabled: true
-
   blur_kernel: 5
-
   low_threshold: 50
   high_threshold: 150
 
@@ -93,15 +76,11 @@ canny:
 
 hough:
   enabled: true
-
   rho: 1.0
   theta_deg: 1.0
-
   threshold: 20
-
   min_line_length: 20
   max_line_gap: 30
-
   slope_abs_min: 0.30
   slope_abs_max: 3.0
 
@@ -113,18 +92,13 @@ hough:
 components:
   min_area_frac: 0.0004
   max_area_frac: 0.03
-
   height_cap_frac: 0.22
   width_cap_frac: 0.30
-
   aspect_ratio_max: 6.0
   fill_ratio_min: 0.15
-
   bottom_relax_frac: 0.25
-
   bottom_aspect_ratio_max: 10.0
   bottom_fill_ratio_min: 0.10
-
   bottom_height_cap_frac: 0.50
   bottom_width_cap_frac: 0.50
 
@@ -133,24 +107,14 @@ components:
 # REGION OF INTEREST
 # =====================================================================
 #
-# Road trapezoid:
+# Top:       45% ---------------- 55%
+# Bottom:    10% ---------------- 90%
 #
-#             37.5% -------- 62.5%
-#                \              /
-#                 \            /
-#                  \          /
-#                   \        /
-#                    \      /
-#                     \    /
-#                      \  /
-#                       \/
+# The top is narrow because lane markings converge toward
+# the vanishing point.
 #
-#             10% ---------------- 90%
-#
-# Top is deliberately narrow because the lane markings converge
-# toward the horizon.
-#
-# Bottom is wide because the road occupies most of the lower frame.
+# The bottom is wide because the road occupies a larger
+# portion of the lower image.
 #
 # =====================================================================
 
@@ -158,10 +122,10 @@ roi:
   enabled: true
 
   vertices:
-    - [0.10, 0.90]   # bottom-left
-    - [0.375, 0.55]  # top-left
-    - [0.625, 0.55]  # top-right
-    - [0.90, 0.90]   # bottom-right
+    - [0.10, 0.90]
+    - [0.45, 0.55]
+    - [0.55, 0.55]
+    - [0.90, 0.90]
 
 
 # =====================================================================
@@ -169,43 +133,22 @@ roi:
 # =====================================================================
 
 sliding_window:
-
-  # Number of windows from bottom to top.
   n_windows: 9
-
-  # Width of each sliding window as a fraction of frame width.
   window_width_frac: 0.10
 
-  # Minimum pixels required before recentering a window.
   min_pixels_to_recenter: 12
-
-  # Minimum total lane pixels required for polynomial fitting.
   min_pixels_total: 100
-
-  # Minimum pixels expected in a window.
   min_pixels_per_window: 6
 
-  # Maximum RMS fitting error.
   max_fit_rms_px: 25.0
 
-
-  # ---------------------------------------------------------------
-  # Lane geometry
-  # ---------------------------------------------------------------
-
-  # Approximate vanishing point.
   vanishing_x_frac: 0.50
 
-  # Prevent left detector from moving too far into the right side.
   left_max_x_frac: 0.58
-
-  # Prevent right detector from moving too far into the left side.
   right_min_x_frac: 0.42
 
-  # Prevent sudden sliding-window jumps.
   max_recenter_jump_frac: 0.10
 
-  # Check expected lane curve direction.
   check_curve_direction: true
 
 
@@ -214,15 +157,9 @@ sliding_window:
 # =====================================================================
 
 validation:
-
-  # Maximum allowed lane curve sweep.
   max_sweep_frac: 0.60
-
-  # Minimum and maximum physically reasonable lane width.
   min_lane_width_px: 30
   max_lane_width_px: 800
-
-  # Allowed lane-width variation.
   max_width_variation: 1.0
 
 
@@ -231,17 +168,9 @@ validation:
 # =====================================================================
 
 lane_state:
-
-  # Keep previous lane estimate for this many failed frames.
   hold_frames: 8
-
-  # Completely lose the previous estimate after this many misses.
   miss_frames: 20
-
-  # EMA smoothing factor.
   smoothing_alpha: 0.30
-
-  # Minimum confidence required for a valid detection.
   min_confidence: 0.15
 
 
@@ -250,11 +179,7 @@ lane_state:
 # =====================================================================
 
 ego_position:
-
-  # Camera/vehicle center assumed at 50% of image width.
   ego_x_frac: 0.50
-
-  # Evaluate lane position at 85% of image height.
   lane_eval_y_frac: 0.85
 
 
@@ -263,17 +188,9 @@ ego_position:
 # =====================================================================
 
 lane_change:
-
-  # Number of 1 Hz samples used for rolling median.
   window_samples: 8
-
-  # Normalized offset threshold for lane state.
   lane_state_thresh: 0.15
-
-  # Minimum normalized offset peak required.
   min_peak_magnitude: 0.25
-
-  # Cooldown after detecting a lane change.
   cooldown_samples: 10
 
 
@@ -282,26 +199,19 @@ lane_change:
 # =====================================================================
 
 sign_detect:
-
   enabled: true
-
   weights: models/indian_signs.pt
 
   conf_threshold: 0.35
   iou_threshold: 0.45
-
   imgsz: 640
-
   device: cpu
 
-  # Bounding-box size limits.
   min_bbox_px: 20
   max_bbox_px: 250
 
-  # Reject detections inside windshield artifact.
   artifact_x1: 0.64
   artifact_y1: 0.60
-
   artifact_x2: 0.75
   artifact_y2: 0.72
 
@@ -311,12 +221,6 @@ sign_detect:
 # =====================================================================
 
 sign_track:
-
-  # IoU required to associate detections across frames.
   iou_match_threshold: 0.35
-
-  # Maximum number of frames a track can survive without detection.
   max_age: 15
-
-  # Minimum detections before a sign becomes a confirmed track.
   min_hits: 3
