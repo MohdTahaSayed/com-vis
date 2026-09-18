@@ -14,7 +14,7 @@ video:
 # =====================================================================
 
 artifact_mask:
-  enabled: true
+  enabled: false
   x1: 0.64
   y1: 0.60
   x2: 0.75
@@ -27,13 +27,13 @@ artifact_mask:
 
 horizon:
   enabled: true
-  search_top_frac: 0.30
-  search_bot_frac: 0.75
-  variance_threshold: 60.0
-  run_length: 8
+  search_top_frac: 0.50
+  search_bot_frac: 0.70
+  variance_threshold: 30.0
+  run_length: 5
   smoothing_alpha: 0.25
-  min_y_frac: 0.35
-  max_y_frac: 0.65
+  min_y_frac: 0.62
+  max_y_frac: 0.68
 
 
 # =====================================================================
@@ -106,26 +106,15 @@ components:
 # =====================================================================
 # REGION OF INTEREST
 # =====================================================================
-#
-# Top:       45% ---------------- 55%
-# Bottom:    10% ---------------- 90%
-#
-# The top is narrow because lane markings converge toward
-# the vanishing point.
-#
-# The bottom is wide because the road occupies a larger
-# portion of the lower image.
-#
-# =====================================================================
 
 roi:
   enabled: true
 
   vertices:
-    - [0.10, 0.90]
+    - [0.01, 0.90]
     - [0.45, 0.55]
     - [0.55, 0.55]
-    - [0.90, 0.90]
+    - [0.99, 0.90]
 
 
 # =====================================================================
@@ -133,8 +122,8 @@ roi:
 # =====================================================================
 
 sliding_window:
-  n_windows: 9
-  window_width_frac: 0.10
+  n_windows: 20
+  window_width_frac: 0.15
 
   min_pixels_to_recenter: 12
   min_pixels_total: 100
