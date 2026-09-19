@@ -1,511 +1,675 @@
-from __future__ import annotations
+"""
+Lane polynomial fitting using histogram + sliding windows.
 
-import warnings
+This module:
+1. Builds a bottom-region histogram of lane pixels.
+2. Finds left/right starting positions.
+3. Tracks lane pixels using sliding windows.
+4. Fits a quadratic polynomial x = ay^2 + by + c.
+5. Rejects only fits that have insufficient pixels or excessive RMS error.
+
+Geometric lane validation is handled separately by lane_validation.py.
+"""
+
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
 
 
+# ============================================================
+# DATA STRUCTURES
+# ============================================================
+
+@dataclass
+class LaneFitResult:
+    """
+    Result of fitting one lane boundary.
+    """
+
+    coeffs: Optional[np.ndarray] = None
+    confidence: float = 0.0
+    n_pixels: int = 0
+    rms_error: float = 0.0
+
+    x_base: Optional[int] = None
+
+    # Debug information
+    x_pixels: Optional[np.ndarray] = None
+    y_pixels: Optional[np.ndarray] = None
+
+    @property
+    def valid(self) -> bool:
+        return self.coeffs is not None
+
+
 @dataclass
 class SlidingWindowConfig:
-    n_windows: int = 9
-    window_width_frac: float = 0.12
+    """
+    Sliding-window configuration.
+    """
+
+    n_windows: int = 20
+    window_width_frac: float = 0.15
 
     min_pixels_to_recenter: int = 12
+    min_pixels_total: int = 100
     min_pixels_per_window: int = 6
-    min_pixels_total: int = 80
 
-    max_fit_rms_px: float = 30.0
+    max_fit_rms_px: float = 25.0
 
-    # Keep left/right windows on their respective sides.
+    vanishing_x_frac: float = 0.50
+
     left_max_x_frac: float = 0.58
     right_min_x_frac: float = 0.42
 
-    # Prevent a window from jumping onto another object/edge.
-    max_recenter_jump_frac: float = 0.12
-
-    # Lane markings in this video may not cover 40% of the frame.
-    min_vertical_coverage_frac: float = 0.25
+    max_recenter_jump_frac: float = 0.10
 
     check_curve_direction: bool = True
 
+    # These are kept configurable because the previous
+    # implementation used shifted histogram centers.
+    left_base_shift_px: int = 0
+    right_base_shift_px: int = 0
+
     @classmethod
-    def from_dict(cls, d: Dict) -> "SlidingWindowConfig":
-        d = d or {}
-        c = cls()
+    def from_dict(cls, d):
+        return cls(
+            n_windows=int(d.get("n_windows", 20)),
+            window_width_frac=float(d.get("window_width_frac", 0.15)),
+            min_pixels_to_recenter=int(
+                d.get("min_pixels_to_recenter", 12)
+            ),
+            min_pixels_total=int(
+                d.get("min_pixels_total", 100)
+            ),
+            min_pixels_per_window=int(
+                d.get("min_pixels_per_window", 6)
+            ),
+            max_fit_rms_px=float(
+                d.get("max_fit_rms_px", 25.0)
+            ),
+            vanishing_x_frac=float(
+                d.get("vanishing_x_frac", 0.50)
+            ),
+            left_max_x_frac=float(
+                d.get("left_max_x_frac", 0.58)
+            ),
+            right_min_x_frac=float(
+                d.get("right_min_x_frac", 0.42)
+            ),
+            max_recenter_jump_frac=float(
+                d.get("max_recenter_jump_frac", 0.10)
+            ),
+            check_curve_direction=bool(
+                d.get("check_curve_direction", True)
+            ),
+            left_base_shift_px=int(
+                d.get("left_base_shift_px", 0)
+            ),
+            right_base_shift_px=int(
+                d.get("right_base_shift_px", 0)
+            ),
+        )
 
-        for k, v in d.items():
-            if hasattr(c, k):
-                setattr(c, k, v)
 
-        return c
-
-
-@dataclass
-class FitResult:
-    side: str
-    coeffs: Optional[np.ndarray]
-    pixels: np.ndarray
-    confidence: float
-    n_pixels: int
-    x_base: float
-
+# ============================================================
+# MAIN FITTER
+# ============================================================
 
 class LaneFitter:
+    """
+    Histogram + sliding-window lane detector.
 
-    def __init__(self, cfg: SlidingWindowConfig):
-        self.cfg = cfg
+    Input:
+        Binary lane-pixel image.
 
-    # ---------------------------------------------------------
-    # HISTOGRAM BASE
-    # ---------------------------------------------------------
+    Output:
+        Left and right quadratic lane fits.
+    """
 
-    def _histogram_base(self, mask: np.ndarray) -> Tuple[int, int]:
+    def __init__(self, config=None):
 
-        h, w = mask.shape[:2]
+        if config is None:
+            self.cfg = SlidingWindowConfig()
 
-        bottom = mask[int(h * 0.70):, :]
+        elif isinstance(config, SlidingWindowConfig):
+            # test_stage1.py already created the config object
+            self.cfg = config
 
-        hist = np.sum(
-            bottom > 0,
+        elif isinstance(config, dict):
+            # Config was supplied as a dictionary
+            self.cfg = SlidingWindowConfig.from_dict(config)
+
+        else:
+            raise TypeError(
+                "LaneFitter config must be either "
+                "SlidingWindowConfig, dict, or None."
+            )
+
+    # ========================================================
+    # HISTOGRAM
+    # ========================================================
+
+    def _histogram_base(
+        self,
+        binary: np.ndarray
+    ) -> Tuple[int, int, np.ndarray]:
+
+        h, w = binary.shape[:2]
+
+        # Use lower 30% of image.
+        # This is where lane lines are usually strongest.
+        bottom_start = int(h * 0.70)
+
+        histogram = np.sum(
+            binary[bottom_start:, :] > 0,
             axis=0
         ).astype(np.float32)
 
-        kernel = np.ones(
-            15,
-            dtype=np.float32
-        ) / 15.0
+        # Smooth histogram to reduce isolated peaks.
+        kernel_size = 15
 
-        hist = np.convolve(
-            hist,
-            kernel,
-            mode="same"
+        if w >= kernel_size:
+            kernel = np.ones(kernel_size, dtype=np.float32)
+            kernel /= kernel.sum()
+
+            histogram_smooth = np.convolve(
+                histogram,
+                kernel,
+                mode="same"
+            )
+        else:
+            histogram_smooth = histogram
+
+        # ----------------------------------------------------
+        # LEFT HALF
+        # ----------------------------------------------------
+
+        left_end = int(w * 0.45)
+
+        left_region = histogram_smooth[:left_end]
+
+        if np.max(left_region) > 0:
+            left_base = int(np.argmax(left_region))
+        else:
+            left_base = int(w * 0.25)
+
+        # Optional configurable shift.
+        left_base += self.cfg.left_base_shift_px
+
+        # Keep inside image.
+        left_base = int(
+            np.clip(left_base, 0, w - 1)
         )
 
-        left_lo = 0
-        left_hi = int(0.45 * w)
+        # ----------------------------------------------------
+        # RIGHT HALF
+        # ----------------------------------------------------
 
-        right_lo = int(0.55 * w)
-        right_hi = w
+        right_start = int(w * 0.55)
 
-        left_hist = hist[left_lo:left_hi]
-        right_hist = hist[right_lo:right_hi]
+        right_region = histogram_smooth[right_start:]
 
-        if left_hist.max() > 0:
-            x_left = left_lo + int(
-                np.argmax(left_hist)
+        if np.max(right_region) > 0:
+            right_base = (
+                int(np.argmax(right_region))
+                + right_start
             )
         else:
-            x_left = int(0.25 * w)
+            right_base = int(w * 0.75)
 
-        if right_hist.max() > 0:
-            x_right = right_lo + int(
-                np.argmax(right_hist)
-            )
-        else:
-            x_right = int(0.75 * w)
+        # Optional configurable shift.
+        right_base += self.cfg.right_base_shift_px
 
-        return x_left, x_right
+        # Keep inside image.
+        right_base = int(
+            np.clip(right_base, 0, w - 1)
+        )
 
-    # ---------------------------------------------------------
+        return (
+            left_base,
+            right_base,
+            histogram_smooth
+        )
+
+    # ========================================================
     # SLIDING WINDOWS
-    # ---------------------------------------------------------
+    # ========================================================
 
-    def _sliding_window(
+    def _collect_side_pixels(
         self,
-        mask: np.ndarray,
+        binary: np.ndarray,
         x_base: int,
-        side: str,
-    ) -> np.ndarray:
+        side: str
+    ) -> Tuple[np.ndarray, np.ndarray]:
 
-        h, w = mask.shape[:2]
+        h, w = binary.shape[:2]
 
-        n = self.cfg.n_windows
+        # Get coordinates of all non-zero pixels.
+        nonzero_y, nonzero_x = np.nonzero(binary > 0)
 
-        win_w = max(
-            24,
-            int(self.cfg.window_width_frac * w)
+        if len(nonzero_x) == 0:
+            return (
+                np.array([], dtype=np.int32),
+                np.array([], dtype=np.int32)
+            )
+
+        n_windows = self.cfg.n_windows
+
+        window_height = max(
+            1,
+            h // n_windows
         )
 
-        win_h = h // n
-
-        max_jump = int(
-            self.cfg.max_recenter_jump_frac * w
+        window_width = max(
+            10,
+            int(w * self.cfg.window_width_frac)
         )
-
-        nonzero_y, nonzero_x = np.nonzero(mask)
 
         current_x = int(x_base)
 
-        collected: List[np.ndarray] = []
+        collected_x = []
+        collected_y = []
 
-        for i in range(n):
+        # ----------------------------------------------------
+        # PROCESS FROM BOTTOM TO TOP
+        # ----------------------------------------------------
 
-            y_low = h - (i + 1) * win_h
-            y_high = h - i * win_h
+        for window in range(n_windows):
 
-            x_low = current_x - win_w // 2
-            x_high = current_x + win_w // 2
+            y_high = h - window * window_height
+            y_low = max(
+                0,
+                h - (window + 1) * window_height
+            )
 
-            # Keep windows on their respective side.
-            if side == "left":
-                x_high = min(
-                    x_high,
-                    int(self.cfg.left_max_x_frac * w)
-                )
-            else:
-                x_low = max(
-                    x_low,
-                    int(self.cfg.right_min_x_frac * w)
-                )
+            # Window boundaries.
+            x_low = current_x - window_width // 2
+            x_high = current_x + window_width // 2
 
-            if x_high <= x_low:
-                continue
+            x_low = max(0, x_low)
+            x_high = min(w, x_high)
 
-            selection = (
+            # Pixels inside current window.
+            good = (
                 (nonzero_y >= y_low)
                 & (nonzero_y < y_high)
                 & (nonzero_x >= x_low)
                 & (nonzero_x < x_high)
             )
 
-            ys = nonzero_y[selection]
-            xs = nonzero_x[selection]
+            good_x = nonzero_x[good]
+            good_y = nonzero_y[good]
 
-            if len(xs) < self.cfg.min_pixels_per_window:
-                continue
+            if len(good_x) > 0:
+                collected_x.append(good_x)
+                collected_y.append(good_y)
 
-            collected.append(
-                np.stack(
-                    [xs, ys],
-                    axis=1
-                ).astype(np.int32)
-            )
+            # ------------------------------------------------
+            # RECENTER
+            # ------------------------------------------------
 
-            # Recenter only when enough pixels exist.
-            if len(xs) >= self.cfg.min_pixels_to_recenter:
+            if len(good_x) >= self.cfg.min_pixels_to_recenter:
 
-                proposed_x = int(
-                    np.median(xs)
+                new_x = int(np.mean(good_x))
+
+                # Prevent very large jumps.
+                max_jump = int(
+                    w * self.cfg.max_recenter_jump_frac
                 )
 
-                jump = proposed_x - current_x
+                if abs(new_x - current_x) <= max_jump:
+                    current_x = new_x
 
-                if abs(jump) <= max_jump:
-                    current_x = proposed_x
+        # ----------------------------------------------------
+        # COMBINE
+        # ----------------------------------------------------
 
-        if not collected:
-            return np.zeros(
-                (0, 2),
-                dtype=np.int32
+        if len(collected_x) == 0:
+            return (
+                np.array([], dtype=np.int32),
+                np.array([], dtype=np.int32)
             )
 
-        pixels = np.concatenate(
-            collected,
-            axis=0
-        )
+        x_pixels = np.concatenate(collected_x)
+        y_pixels = np.concatenate(collected_y)
 
-        # -----------------------------------------------------
-        # VERTICAL COVERAGE
-        # -----------------------------------------------------
+        return x_pixels, y_pixels
 
-        y_span = (
-            float(pixels[:, 1].max())
-            - float(pixels[:, 1].min())
-        )
-
-        coverage = y_span / max(
-            float(h),
-            1.0
-        )
-
-        if coverage < self.cfg.min_vertical_coverage_frac:
-            return np.zeros(
-                (0, 2),
-                dtype=np.int32
-            )
-
-        return pixels
-
-    # ---------------------------------------------------------
+    # ========================================================
     # POLYNOMIAL FIT
-    # ---------------------------------------------------------
+    # ========================================================
 
     def _fit_poly(
         self,
-        pixels: np.ndarray,
-        side: str,
-        frame_height: int,
+        x_pixels: np.ndarray,
+        y_pixels: np.ndarray
     ) -> Tuple[Optional[np.ndarray], float]:
 
-        if pixels.shape[0] < 6:
-            return None, float("inf")
-
-        x = pixels[:, 0].astype(np.float64)
-        y = pixels[:, 1].astype(np.float64)
-
-        # Use the actual frame height instead of hardcoding 576.
-        y_span = y.max() - y.min()
-
-        if y_span < self.cfg.min_vertical_coverage_frac * frame_height:
+        if len(x_pixels) < self.cfg.min_pixels_total:
             return None, float("inf")
 
         try:
-
-            with warnings.catch_warnings():
-
-                warnings.simplefilter("ignore")
-
-                coeffs = np.polyfit(
-                    y,
-                    x,
-                    deg=2
-                )
-
+            # x = ay² + by + c
+            coeffs = np.polyfit(
+                y_pixels,
+                x_pixels,
+                2
+            )
         except (np.linalg.LinAlgError, ValueError):
-
             return None, float("inf")
 
-        x_pred = (
-            coeffs[0] * y * y
-            + coeffs[1] * y
-            + coeffs[2]
+        predicted_x = np.polyval(
+            coeffs,
+            y_pixels
         )
+
+        residuals = x_pixels - predicted_x
 
         rms = float(
             np.sqrt(
                 np.mean(
-                    (x_pred - x) ** 2
+                    residuals ** 2
                 )
             )
         )
-
-        if rms > self.cfg.max_fit_rms_px:
-            return None, rms
-
-        # -----------------------------------------------------
-        # CORRECT CURVE DIRECTION
-        # -----------------------------------------------------
-
-        if self.cfg.check_curve_direction:
-
-            derivative = (
-                2.0 * coeffs[0] * y
-                + coeffs[1]
-            )
-
-            median_slope = float(
-                np.median(derivative)
-            )
-
-            # Image coordinates:
-            #
-            # LEFT lane:
-            # bottom is farther LEFT than the top
-            # therefore dx/dy < 0
-            #
-            # RIGHT lane:
-            # bottom is farther RIGHT than the top
-            # therefore dx/dy > 0
-
-            if side == "left" and median_slope >= 0:
-                return None, rms
-
-            if side == "right" and median_slope <= 0:
-                return None, rms
 
         return coeffs, rms
 
-    # ---------------------------------------------------------
-    # MAIN FIT
-    # ---------------------------------------------------------
+    # ========================================================
+    # CURVE DIRECTION
+    # ========================================================
+
+    def _check_curve_direction(
+        self,
+        coeffs: np.ndarray,
+        height: int,
+        side: str
+    ) -> bool:
+
+        if not self.cfg.check_curve_direction:
+            return True
+
+        y_bottom = int(height * 0.90)
+        y_top = int(height * 0.55)
+
+        x_bottom = float(
+            np.polyval(coeffs, y_bottom)
+        )
+
+        x_top = float(
+            np.polyval(coeffs, y_top)
+        )
+
+        if side == "left":
+
+            # In image coordinates:
+            # left lane should move toward the
+            # vanishing point as y decreases.
+            return x_bottom < x_top
+
+        elif side == "right":
+
+            return x_bottom > x_top
+
+        return True
+
+    # ========================================================
+    # SIDE FIT
+    # ========================================================
+
+    def _fit_side(
+        self,
+        binary: np.ndarray,
+        x_base: int,
+        side: str
+    ) -> LaneFitResult:
+
+        h, w = binary.shape[:2]
+
+        x_pixels, y_pixels = self._collect_side_pixels(
+            binary,
+            x_base,
+            side
+        )
+
+        n_pixels = len(x_pixels)
+
+        confidence = min(
+            1.0,
+            n_pixels / float(
+                max(1, self.cfg.min_pixels_total * 3)
+            )
+        )
+
+        result = LaneFitResult(
+            coeffs=None,
+            confidence=confidence,
+            n_pixels=n_pixels,
+            x_base=x_base,
+            x_pixels=x_pixels,
+            y_pixels=y_pixels
+        )
+
+        # ----------------------------------------------------
+        # NOT ENOUGH PIXELS
+        # ----------------------------------------------------
+
+        if n_pixels < self.cfg.min_pixels_total:
+            return result
+
+        # ----------------------------------------------------
+        # POLYNOMIAL FIT
+        # ----------------------------------------------------
+
+        coeffs, rms = self._fit_poly(
+            x_pixels,
+            y_pixels
+        )
+
+        result.rms_error = rms
+
+        if coeffs is None:
+            return result
+
+        # ----------------------------------------------------
+        # RMS CHECK
+        # ----------------------------------------------------
+
+        if rms > self.cfg.max_fit_rms_px:
+            return result
+
+        # ----------------------------------------------------
+        # CURVE DIRECTION CHECK
+        # ----------------------------------------------------
+
+        if not self._check_curve_direction(
+            coeffs,
+            h,
+            side
+        ):
+            return result
+
+        # ----------------------------------------------------
+        # IMPORTANT:
+        #
+        # Do NOT reject the polynomial using the old
+        # side-position check here.
+        #
+        # lane_validation.py is responsible for checking
+        # whether the resulting curve is geometrically
+        # valid as a lane boundary.
+        # ----------------------------------------------------
+
+        result.coeffs = coeffs
+
+        return result
+
+    # ========================================================
+    # PUBLIC FIT METHOD
+    # ========================================================
 
     def fit(
         self,
-        mask: np.ndarray
-    ) -> Tuple[FitResult, FitResult]:
+        binary: np.ndarray
+    ) -> Tuple[LaneFitResult, LaneFitResult]:
 
-        h, w = mask.shape[:2]
+        if binary is None:
+            return (
+                LaneFitResult(),
+                LaneFitResult()
+            )
 
-        x_left_base, x_right_base = (
-            self._histogram_base(mask)
+        if binary.ndim != 2:
+            raise ValueError(
+                "LaneFitter.fit() expects a binary 2D image."
+            )
+
+        # Ensure uint8 binary image.
+        binary = (
+            binary > 0
+        ).astype(np.uint8) * 255
+
+        # Find histogram bases.
+        left_base, right_base, _ = (
+            self._histogram_base(binary)
         )
 
-        left_pixels = self._sliding_window(
-            mask,
-            x_left_base,
+        # Fit left lane.
+        left_result = self._fit_side(
+            binary,
+            left_base,
             "left"
         )
 
-        right_pixels = self._sliding_window(
-            mask,
-            x_right_base,
+        # Fit right lane.
+        right_result = self._fit_side(
+            binary,
+            right_base,
             "right"
         )
 
-        left_coeffs, left_rms = self._fit_poly(
-            left_pixels,
-            "left",
-            h
-        )
-
-        right_coeffs, right_rms = self._fit_poly(
-            right_pixels,
-            "right",
-            h
-        )
-
-        def confidence(
-            n_pixels: int,
-            rms: float
-        ) -> float:
-
-            if rms == float("inf"):
-                return 0.0
-
-            base = min(
-                1.0,
-                n_pixels /
-                float(self.cfg.min_pixels_total)
-            )
-
-            rms_factor = max(
-                0.0,
-                1.0 - (
-                    rms /
-                    max(
-                        self.cfg.max_fit_rms_px,
-                        1.0
-                    )
-                )
-            )
-
-            return float(
-                base *
-                (0.5 + 0.5 * rms_factor)
-            )
-
-        left = FitResult(
-            side="left",
-            coeffs=left_coeffs,
-            pixels=left_pixels,
-            confidence=confidence(
-                len(left_pixels),
-                left_rms
-            ),
-            n_pixels=len(left_pixels),
-            x_base=x_left_base,
-        )
-
-        right = FitResult(
-            side="right",
-            coeffs=right_coeffs,
-            pixels=right_pixels,
-            confidence=confidence(
-                len(right_pixels),
-                right_rms
-            ),
-            n_pixels=len(right_pixels),
-            x_base=x_right_base,
-        )
-
-        return left, right
-
-    # ---------------------------------------------------------
-    # EVALUATE
-    # ---------------------------------------------------------
-
-    @staticmethod
-    def evaluate(
-        coeffs: np.ndarray,
-        ys: np.ndarray
-    ) -> np.ndarray:
-
         return (
-            coeffs[0] * ys * ys
-            + coeffs[1] * ys
-            + coeffs[2]
+            left_result,
+            right_result
         )
 
-    # ---------------------------------------------------------
+    # ========================================================
     # DEBUG RENDER
-    # ---------------------------------------------------------
+    # ========================================================
 
     def debug_render(
         self,
-        frame: np.ndarray,
-        left: FitResult,
-        right: FitResult
+        binary: np.ndarray,
+        left: LaneFitResult,
+        right: LaneFitResult
     ) -> np.ndarray:
 
-        out = frame.copy()
+        h, w = binary.shape[:2]
 
-        # Selected left pixels
-        for x, y in left.pixels:
-
-            cv2.circle(
-                out,
-                (int(x), int(y)),
-                1,
-                (0, 180, 255),
-                -1
+        # Convert binary image to BGR.
+        if binary.ndim == 2:
+            canvas = cv2.cvtColor(
+                binary,
+                cv2.COLOR_GRAY2BGR
             )
+        else:
+            canvas = binary.copy()
 
-        # Selected right pixels
-        for x, y in right.pixels:
+        # ----------------------------------------------------
+        # DRAW COLLECTED PIXELS
+        # ----------------------------------------------------
 
-            cv2.circle(
-                out,
-                (int(x), int(y)),
-                1,
-                (255, 120, 0),
-                -1
-            )
+        if (
+            left.x_pixels is not None
+            and left.y_pixels is not None
+        ):
+            for x, y in zip(
+                left.x_pixels,
+                left.y_pixels
+            ):
+                cv2.circle(
+                    canvas,
+                    (int(x), int(y)),
+                    1,
+                    (255, 255, 255),
+                    -1
+                )
 
-        ys = np.linspace(
-            int(frame.shape[0] * 0.40),
-            frame.shape[0] - 1,
-            200
-        )
+        if (
+            right.x_pixels is not None
+            and right.y_pixels is not None
+        ):
+            for x, y in zip(
+                right.x_pixels,
+                right.y_pixels
+            ):
+                cv2.circle(
+                    canvas,
+                    (int(x), int(y)),
+                    1,
+                    (255, 255, 255),
+                    -1
+                )
+
+        # ----------------------------------------------------
+        # DRAW POLYNOMIALS
+        # ----------------------------------------------------
+
+        y_values = np.linspace(
+            int(h * 0.55),
+            int(h * 0.95),
+            100
+        ).astype(np.int32)
 
         if left.coeffs is not None:
 
-            xs = self.evaluate(
+            x_values = np.polyval(
                 left.coeffs,
-                ys
+                y_values
             )
 
-            pts = np.column_stack(
-                [xs, ys]
+            points = np.column_stack(
+                (x_values, y_values)
             ).astype(np.int32)
 
-            cv2.polylines(
-                out,
-                [pts],
-                False,
-                (0, 255, 255),
-                3
-            )
+            for i in range(len(points) - 1):
+
+                p1 = tuple(points[i])
+                p2 = tuple(points[i + 1])
+
+                cv2.line(
+                    canvas,
+                    p1,
+                    p2,
+                    (0, 255, 0),
+                    3
+                )
 
         if right.coeffs is not None:
 
-            xs = self.evaluate(
+            x_values = np.polyval(
                 right.coeffs,
-                ys
+                y_values
             )
 
-            pts = np.column_stack(
-                [xs, ys]
+            points = np.column_stack(
+                (x_values, y_values)
             ).astype(np.int32)
 
-            cv2.polylines(
-                out,
-                [pts],
-                False,
-                (0, 255, 0),
-                3
-            )
+            for i in range(len(points) - 1):
 
-        return out
+                p1 = tuple(points[i])
+                p2 = tuple(points[i + 1])
+
+                cv2.line(
+                    canvas,
+                    p1,
+                    p2,
+                    (0, 0, 255),
+                    3
+                )
+
+        return canvas

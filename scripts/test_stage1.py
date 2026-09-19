@@ -8,13 +8,13 @@ import cv2
 import numpy as np
 import yaml
 
+# ------------------------------------------------------------
 # Allow imports from project root
-sys.path.insert(
-    0,
-    os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..")
-    )
+# ------------------------------------------------------------
+PROJECT_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
 )
+sys.path.insert(0, PROJECT_ROOT)
 
 from src.artifact_mask import ArtifactMask, ArtifactMaskConfig
 from src.horizon import HorizonDetector, HorizonConfig
@@ -28,7 +28,14 @@ from src.io_video import VideoReader
 
 
 # ============================================================
-# CONFIG LOADING
+# CONFIG
+# ============================================================
+
+CONFIG_PATH = "config/default.yaml"
+
+
+# ============================================================
+# LOAD CONFIG
 # ============================================================
 
 def load_config(path):
@@ -41,46 +48,44 @@ def load_config(path):
 # ============================================================
 
 def get_frame(args):
-
     vr = VideoReader(args.input)
 
     fps = vr.info.fps
 
     if args.time is not None:
         idx = int(round(args.time * fps))
-    else:
+    elif args.frame is not None:
         idx = args.frame
+    else:
+        idx = 0
 
     frame = vr.read_frame(idx)
-
-    # Calculate timestamp using actual FPS
-    ts = idx / fps if fps > 0 else 0.0
-
     vr.release()
 
     if frame is None:
         raise RuntimeError(
-            f"Could not read frame {idx} "
-            f"(time={ts:.2f}s)"
+            f"Could not read frame {idx} from {args.input}"
         )
 
-    return frame, idx, ts
+    timestamp = idx / fps
+
+    return frame, idx, timestamp
 
 
 # ============================================================
-# LABEL IMAGE
+# TEXT LABEL
 # ============================================================
 
 def label(
     img,
     text,
+    position=(8, 24),
     color=(0, 255, 255),
 ):
-
     cv2.putText(
         img,
         text,
-        (8, 24),
+        position,
         cv2.FONT_HERSHEY_SIMPLEX,
         0.55,
         (0, 0, 0),
@@ -91,7 +96,7 @@ def label(
     cv2.putText(
         img,
         text,
-        (8, 24),
+        position,
         cv2.FONT_HERSHEY_SIMPLEX,
         0.55,
         color,
@@ -103,48 +108,102 @@ def label(
 
 
 # ============================================================
+# DRAW POLYNOMIAL
+# ============================================================
+
+def draw_polynomial(
+    frame,
+    coeffs,
+    y_range,
+    color,
+    thickness=3,
+):
+    if coeffs is None:
+        return frame
+
+    y1, y2 = y_range
+
+    ys = np.linspace(y1, y2, 100)
+
+    a, b, c = coeffs
+
+    xs = (
+        a * ys * ys
+        + b * ys
+        + c
+    )
+
+    pts = np.stack(
+        [xs, ys],
+        axis=1,
+    ).astype(np.int32)
+
+    h, w = frame.shape[:2]
+
+    valid = (
+        (pts[:, 0] >= 0)
+        & (pts[:, 0] < w)
+        & (pts[:, 1] >= 0)
+        & (pts[:, 1] < h)
+    )
+
+    pts = pts[valid]
+
+    if len(pts) >= 2:
+        cv2.polylines(
+            frame,
+            [pts],
+            False,
+            color,
+            thickness,
+        )
+
+    return frame
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
 def main():
 
-    ap = argparse.ArgumentParser(
-        description="Stage 1 lane detection debugging"
+    parser = argparse.ArgumentParser(
+        description="Stage 1 lane detection verification"
     )
 
-    ap.add_argument(
+    parser.add_argument(
         "--input",
         required=True,
         help="Input video path",
     )
 
-    ap.add_argument(
+    parser.add_argument(
         "--frame",
         type=int,
         default=None,
-        help="Frame number",
+        help="Frame number to inspect",
     )
 
-    ap.add_argument(
+    parser.add_argument(
         "--time",
         type=float,
         default=None,
-        help="Timestamp in seconds",
+        help="Timestamp in seconds to inspect",
     )
 
-    ap.add_argument(
+    parser.add_argument(
         "--config",
-        default="config/default.yaml",
-        help="YAML configuration",
+        default=CONFIG_PATH,
+        help="YAML configuration path",
     )
 
-    ap.add_argument(
+    parser.add_argument(
         "--outdir",
         default="outputs",
         help="Output directory",
     )
 
-    args = ap.parse_args()
+    args = parser.parse_args()
 
     # --------------------------------------------------------
     # Output directory
@@ -152,7 +211,7 @@ def main():
 
     os.makedirs(
         args.outdir,
-        exist_ok=True
+        exist_ok=True,
     )
 
     # --------------------------------------------------------
@@ -220,58 +279,54 @@ def main():
     # Read selected frame
     # --------------------------------------------------------
 
-    frame, idx, ts = get_frame(args)
+    frame, frame_idx, timestamp = get_frame(args)
 
     h, w = frame.shape[:2]
 
     # --------------------------------------------------------
-    # STAGE 0
-    # Artifact masking
+    # Stage 0: Artifact mask
     # --------------------------------------------------------
 
-    f_masked = artifact_mask.apply(frame)
+    masked_frame = artifact_mask.apply(frame)
 
     # --------------------------------------------------------
-    # HORIZON
+    # Stage 1A: Horizon detection
     # --------------------------------------------------------
 
-    horizon_y = horizon.detect(
-        f_masked
+    horizon_y = horizon.detect(masked_frame)
+
+    # --------------------------------------------------------
+    # Stage 1B: Canny + ROI + HSV reinforcement
+    # --------------------------------------------------------
+
+    edges_roi, edges_raw, hsv_hits = edges_module.compute(
+        masked_frame,
+        top_y_override=horizon_y,
     )
 
     # --------------------------------------------------------
-    # CANNY + ROI + HSV
+    # Stage 1C: Hough
     # --------------------------------------------------------
 
-    edges_roi, edges_raw, hsv_hits = (
-        edges_module.compute(
-            f_masked,
-            top_y_override=horizon_y,
-        )
-    )
-
-    # --------------------------------------------------------
-    # HOUGH
-    # --------------------------------------------------------
-
-    left_segs, right_segs, discard_segs = (
+    left_segments, right_segments, discard_segments = (
         hough.classify(edges_roi)
     )
 
     # --------------------------------------------------------
-    # LANE FIT
+    # Stage 1D: Sliding-window polynomial fitting
     #
     # IMPORTANT:
-    # New fitter receives frame=f_masked.
+    # Current LaneFitter API is:
+    #
+    #     fitter.fit(edges_roi)
+    #
+    # Do NOT pass frame=, image=, base_left=, etc.
     # --------------------------------------------------------
 
-    left, right = fitter.fit(
-        edges_roi,
-        frame=f_masked,
-    )
+    left, right = fitter.fit(edges_roi)
 
     # --------------------------------------------------------
-    # VALIDATION
+    # Stage 1E: Validation
     # --------------------------------------------------------
 
     y_range = (
@@ -284,6 +339,113 @@ def main():
         right.coeffs,
         y_range,
         w,
+    )
+
+    # ========================================================
+    # PRINT DIAGNOSTICS
+    # ========================================================
+
+    print()
+    print("=" * 70)
+    print("STAGE 1 LANE DETECTION TEST")
+    print("=" * 70)
+
+    print(f"Input       : {args.input}")
+    print(f"Frame       : {frame_idx}")
+    print(f"Timestamp   : {timestamp:.2f} s")
+    print(f"Resolution  : {w} x {h}")
+    print(f"Horizon     : {horizon_y}")
+
+    print()
+    print("CANNY / ROI")
+    print("-" * 70)
+
+    print(
+        f"Raw Canny edges : "
+        f"{int((edges_raw > 0).sum())} px"
+    )
+
+    print(
+        f"ROI edges       : "
+        f"{int((edges_roi > 0).sum())} px"
+    )
+
+    if hsv_hits is not None:
+        print(
+            f"HSV hits        : "
+            f"{int((hsv_hits > 0).sum())} px"
+        )
+
+    print()
+    print("HOUGH")
+    print("-" * 70)
+
+    print(f"Left segments   : {len(left_segments)}")
+    print(f"Right segments  : {len(right_segments)}")
+    print(f"Discarded       : {len(discard_segments)}")
+
+    print()
+    print("POLYNOMIAL FIT")
+    print("-" * 70)
+
+    print(
+        f"LEFT  : "
+        f"pixels={left.n_pixels} "
+        f"confidence={left.confidence:.2f} "
+        f"fit={'YES' if left.coeffs is not None else 'NO'}"
+    )
+
+    print(
+        f"RIGHT : "
+        f"pixels={right.n_pixels} "
+        f"confidence={right.confidence:.2f} "
+        f"fit={'YES' if right.coeffs is not None else 'NO'}"
+    )
+
+    if left.coeffs is not None:
+        print(
+            f"LEFT coeffs  : "
+            f"{left.coeffs}"
+        )
+
+    if right.coeffs is not None:
+        print(
+            f"RIGHT coeffs : "
+            f"{right.coeffs}"
+        )
+
+    print()
+    print("VALIDATION")
+    print("-" * 70)
+
+    print(
+        f"Left valid    : "
+        f"{validation.left_ok}"
+    )
+
+    print(
+        f"Right valid   : "
+        f"{validation.right_ok}"
+    )
+
+    print(
+        f"Pair valid    : "
+        f"{validation.pair_ok}"
+    )
+
+    print(
+        f"Left reason   : "
+        f"{validation.reason_left}"
+    )
+
+    print(
+        f"Right reason  : "
+        f"{validation.reason_right}"
+    )
+
+    print(
+        f"Pair reason   : "
+        f"{validation.reason_pair}"
     )
 
     # ========================================================
@@ -300,49 +462,31 @@ def main():
 
     p1 = hough.debug_render(
         p1,
-        left_segs,
-        right_segs,
-        discard_segs,
+        left_segments,
+        right_segments,
+        discard_segments,
     )
 
-    status = (
-        f"L:{validation.left_ok} "
-        f"R:{validation.right_ok} "
-        f"pair:{validation.pair_ok}"
-    )
-
-    cv2.putText(
-        p1,
-        status,
-        (8, h - 24),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.5,
-        (0, 0, 0),
-        3,
-        cv2.LINE_AA,
-    )
-
-    cv2.putText(
-        p1,
-        status,
-        (8, h - 24),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.5,
-        (255, 255, 255),
-        1,
-        cv2.LINE_AA,
-    )
+    if horizon_y is not None:
+        cv2.line(
+            p1,
+            (0, horizon_y),
+            (w - 1, horizon_y),
+            (255, 255, 0),
+            2,
+        )
 
     label(
         p1,
-        f"t={ts:.2f}s "
-        f"L={len(left_segs)} "
-        f"R={len(right_segs)} Hough",
+        (
+            f"ROI + Hough | "
+            f"t={timestamp:.1f}s"
+        ),
     )
 
     # ========================================================
     # VISUALIZATION 2
-    # Raw Canny
+    # RAW CANNY
     # ========================================================
 
     p2 = cv2.cvtColor(
@@ -352,12 +496,12 @@ def main():
 
     label(
         p2,
-        "Canny raw",
+        "Canny raw - whole frame",
     )
 
     # ========================================================
     # VISUALIZATION 3
-    # Canny + ROI + HSV reinforcement
+    # ROI EDGES
     # ========================================================
 
     p3 = cv2.cvtColor(
@@ -367,144 +511,54 @@ def main():
 
     label(
         p3,
-        f"Lane edges ROI "
-        f"({int((edges_roi > 0).sum())} px)",
+        (
+            f"Final ROI edges - "
+            f"{int((edges_roi > 0).sum())} px"
+        ),
     )
 
     # ========================================================
     # VISUALIZATION 4
-    # Polynomial fit
+    # POLYNOMIAL FIT
     # ========================================================
 
     p4 = frame.copy()
 
-    p4 = fitter.debug_render(
+    p4 = draw_polynomial(
         p4,
-        left,
-        right,
+        left.coeffs,
+        y_range,
+        (0, 255, 255),
+        3,
+    )
+
+    p4 = draw_polynomial(
+        p4,
+        right.coeffs,
+        y_range,
+        (0, 255, 0),
+        3,
     )
 
     label(
         p4,
-        "Lane-shaped sliding windows + polynomial fit",
+        (
+            f"Polynomial fit | "
+            f"L={left.n_pixels}px "
+            f"R={right.n_pixels}px"
+        ),
     )
 
-    # ========================================================
-    # VISUALIZATION 5
-    # Artifact mask
-    # ========================================================
-
-    p5 = artifact_mask.debug_render(
-        frame,
-        fill=True,
-    )
-
-    label(
-        p5,
-        "Artifact mask",
-    )
-
-    # ========================================================
-    # VISUALIZATION 6
-    # HSV mask
-    # ========================================================
-
-    if hsv_hits is not None:
-
-        p6 = cv2.cvtColor(
-            hsv_hits,
-            cv2.COLOR_GRAY2BGR,
-        )
-
-        label(
-            p6,
-            "HSV white/yellow mask",
-        )
-
-    else:
-
-        p6 = np.zeros_like(frame)
-
-        label(
-            p6,
-            "HSV reinforcement unavailable",
-        )
-
-    # ========================================================
-    # VISUALIZATION 7
-    # Horizon
-    # ========================================================
-
-    p7 = frame.copy()
-
-    p7 = horizon.debug_render(
-        p7,
-        horizon_y,
-    )
-
-    label(
-        p7,
-        "Detected horizon",
-    )
-
-    # ========================================================
-    # VISUALIZATION 8
-    # Selected lane pixels
-    # ========================================================
-
-    p8 = frame.copy()
-
-    for x, y in left.pixels:
-
-        cv2.circle(
-            p8,
-            (int(x), int(y)),
-            1,
-            (0, 255, 255),
-            -1,
-        )
-
-    for x, y in right.pixels:
-
-        cv2.circle(
-            p8,
-            (int(x), int(y)),
-            1,
-            (0, 255, 0),
-            -1,
-        )
-
-    label(
-        p8,
-        f"Selected pixels "
-        f"L={left.n_pixels} "
-        f"R={right.n_pixels}",
-    )
-
-    # ========================================================
-    # VISUALIZATION 9
-    # Final lane result
-    # ========================================================
-
-    p9 = frame.copy()
-
-    p9 = fitter.debug_render(
-        p9,
-        left,
-        right,
-        draw_pixels=False,
-    )
-
-    final_status = (
-        f"L={'OK' if validation.left_ok else 'FAIL'} "
-        f"R={'OK' if validation.right_ok else 'FAIL'} "
-        f"PAIR={'OK' if validation.pair_ok else 'FAIL'}"
-    )
+    # Validation text
 
     cv2.putText(
-        p9,
-        final_status,
-        (8, h - 25),
+        p4,
+        (
+            f"L={validation.left_ok} "
+            f"R={validation.right_ok} "
+            f"PAIR={validation.pair_ok}"
+        ),
+        (8, h - 18),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.55,
         (0, 0, 0),
@@ -513,108 +567,39 @@ def main():
     )
 
     cv2.putText(
-        p9,
-        final_status,
-        (8, h - 25),
+        p4,
+        (
+            f"L={validation.left_ok} "
+            f"R={validation.right_ok} "
+            f"PAIR={validation.pair_ok}"
+        ),
+        (8, h - 18),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.55,
         (255, 255, 255),
-        2,
+        1,
         cv2.LINE_AA,
     )
 
-    label(
-        p9,
-        "FINAL LANE CURVES",
-    )
-
     # ========================================================
-    # COMBINE INTO 3 x 3 GRID
+    # COMBINE
     # ========================================================
 
-    panels = [
-        p1, p2, p3,
-        p4, p5, p6,
-        p7, p8, p9,
-    ]
-
-    target_h = 300
-
-    resized = []
-
-    for panel in panels:
-
-        ph, pw = panel.shape[:2]
-
-        scale = target_h / float(ph)
-
-        target_w = int(pw * scale)
-
-        resized_panel = cv2.resize(
-            panel,
-            (target_w, target_h),
-            interpolation=cv2.INTER_AREA,
-        )
-
-        resized.append(
-            resized_panel
-        )
-
-    # Make all panels same size.
-    target_w = max(
-        p.shape[1]
-        for p in resized
+    combo = np.hstack(
+        [p1, p2, p3, p4]
     )
 
-    normalized = []
-
-    for p in resized:
-
-        if p.shape[1] < target_w:
-
-            pad = target_w - p.shape[1]
-
-            p = cv2.copyMakeBorder(
-                p,
-                0,
-                0,
-                0,
-                pad,
-                cv2.BORDER_CONSTANT,
-                value=(0, 0, 0),
-            )
-
-        normalized.append(p)
-
-    row1 = np.hstack(
-        normalized[0:3]
-    )
-
-    row2 = np.hstack(
-        normalized[3:6]
-    )
-
-    row3 = np.hstack(
-        normalized[6:9]
-    )
-
-    combo = np.vstack(
-        [row1, row2, row3]
-    )
-
-    # ========================================================
-    # SAVE OUTPUTS
-    # ========================================================
-
-    out = os.path.join(
+    output_path = os.path.join(
         args.outdir,
         "stage1_verify.png",
     )
 
     cv2.imwrite(
-        out,
+        output_path,
         combo,
     )
+
+    # Save individual images too
 
     cv2.imwrite(
         os.path.join(
@@ -632,145 +617,25 @@ def main():
         edges_roi,
     )
 
-    cv2.imwrite(
-        os.path.join(
-            args.outdir,
-            "stage1_hsv.png",
-        ),
-        hsv_hits
-        if hsv_hits is not None
-        else np.zeros_like(edges_raw),
-    )
-
     # ========================================================
-    # PRINT DEBUG INFORMATION
+    # FINAL
     # ========================================================
 
     print()
-    print("=" * 60)
-    print("STAGE 1 DEBUG")
-    print("=" * 60)
+    print("=" * 70)
+    print("OUTPUT")
+    print("=" * 70)
 
     print(
-        f"frame       = {idx}"
+        f"[ok] wrote: {output_path}"
     )
 
-    print(
-        f"time        = {ts:.2f}s"
-    )
+    print("=" * 70)
 
-    print(
-        f"resolution  = {w}x{h}"
-    )
 
-    print(
-        f"horizon_y   = {horizon_y}"
-    )
-
-    print()
-
-    print(
-        f"Hough:"
-    )
-
-    print(
-        f"  left      = {len(left_segs)}"
-    )
-
-    print(
-        f"  right     = {len(right_segs)}"
-    )
-
-    print(
-        f"  discarded = {len(discard_segs)}"
-    )
-
-    print()
-
-    print(
-        f"Edges:"
-    )
-
-    print(
-        f"  raw       = {int((edges_raw > 0).sum())}"
-    )
-
-    print(
-        f"  ROI       = {int((edges_roi > 0).sum())}"
-    )
-
-    print()
-
-    print(
-        f"Histogram bases:"
-    )
-
-    print(
-        f"  left base  = {left.x_base}"
-    )
-
-    print(
-        f"  right base = {right.x_base}"
-    )
-
-    print()
-
-    print(
-        f"Selected lane pixels:"
-    )
-
-    print(
-        f"  left      = {left.n_pixels}"
-    )
-
-    print(
-        f"  right     = {right.n_pixels}"
-    )
-
-    print()
-
-    print(
-        f"Confidence:"
-    )
-
-    print(
-        f"  left      = {left.confidence:.3f}"
-    )
-
-    print(
-        f"  right     = {right.confidence:.3f}"
-    )
-
-    print()
-
-    print(
-        f"Validation:"
-    )
-
-    print(
-        f"  left      = {validation.left_ok}"
-    )
-
-    print(
-        f"  right     = {validation.right_ok}"
-    )
-
-    print(
-        f"  pair      = {validation.pair_ok}"
-    )
-
-    print()
-
-    print(
-        f"[OK] wrote:"
-    )
-
-    print(
-        f"     {out}"
-    )
-
-    print("=" * 60)
-
+# ============================================================
+# ENTRY POINT
+# ============================================================
 
 if __name__ == "__main__":
     main()

@@ -33,7 +33,7 @@ horizon:
   run_length: 5
   smoothing_alpha: 0.25
   min_y_frac: 0.62
-  max_y_frac: 0.68
+  max_y_frac: 0.62
 
 
 # =====================================================================
@@ -112,8 +112,8 @@ roi:
 
   vertices:
     - [0.01, 0.90]
-    - [0.45, 0.55]
-    - [0.55, 0.55]
+    - [0.45, 0.61]
+    - [0.58, 0.61]
     - [0.99, 0.90]
 
 
@@ -124,22 +124,20 @@ roi:
 sliding_window:
   n_windows: 20
   window_width_frac: 0.15
-
   min_pixels_to_recenter: 12
   min_pixels_total: 100
   min_pixels_per_window: 6
-
   max_fit_rms_px: 25.0
 
   vanishing_x_frac: 0.50
-
   left_max_x_frac: 0.58
   right_min_x_frac: 0.42
 
   max_recenter_jump_frac: 0.10
-
   check_curve_direction: true
 
+  left_base_shift_px: 0
+  right_base_shift_px: -100
 
 # =====================================================================
 # Lane validation

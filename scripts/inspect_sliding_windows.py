@@ -1,544 +1,190 @@
 from __future__ import annotations
 
-import sys
 import os
+import sys
+import argparse
 
-# ------------------------------------------------------------
-# Make project root importable
-# ------------------------------------------------------------
+import cv2
+import numpy as np
+import yaml
 
-PROJECT_ROOT = os.path.dirname(
-    os.path.dirname(
-        os.path.abspath(__file__)
+sys.path.insert(
+    0,
+    os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            ".."
+        )
     )
 )
 
-sys.path.insert(0, PROJECT_ROOT)
-
-
-import cv2
-import yaml
-import numpy as np
-
+from src.artifact_mask import (
+    ArtifactMask,
+    ArtifactMaskConfig
+)
 
 from src.horizon import (
     HorizonDetector,
-    HorizonConfig,
-)
-
-from src.lane_roi import (
-    LaneROI,
-    RoiConfig,
+    HorizonConfig
 )
 
 from src.lane_color import (
     LaneColor,
-    LaneColorConfig,
+    LaneColorConfig
 )
 
 from src.lane_edges import (
     LaneEdges,
-    CannyConfig,
+    CannyConfig
 )
 
+from src.lane_roi import (
+    LaneROI,
+    RoiConfig
+)
 
-# ============================================================
-# SETTINGS
-# ============================================================
+from src.io_video import VideoReader
 
-INPUT = "data/VBOX0011_Trim.mp4"
-
-# Time in seconds
-TIME = 360.0
-
-OUTPUT = "outputs/sliding_windows_check.png"
+from src.lane_fit import (
+    SlidingWindowConfig
+)
 
 
 # ============================================================
 # LOAD CONFIG
 # ============================================================
 
-with open(
-    "config/default.yaml",
-    "r",
-    encoding="utf-8"
-) as f:
+def load_config(path):
 
-    cfg = yaml.safe_load(f) or {}
+    with open(
+        path,
+        "r",
+        encoding="utf-8"
+    ) as f:
 
-
-# ============================================================
-# INITIALIZE PIPELINE COMPONENTS
-# ============================================================
-
-horizon = HorizonDetector(
-    HorizonConfig.from_dict(
-        cfg.get("horizon", {})
-    )
-)
-
-
-roi = LaneROI(
-    RoiConfig.from_dict(
-        cfg.get("roi", {})
-    )
-)
-
-
-lane_color = LaneColor(
-    LaneColorConfig.from_dict(
-        cfg.get("lane_color", {})
-    )
-)
-
-
-edges_module = LaneEdges(
-    CannyConfig.from_dict(
-        cfg.get("canny", {})
-    ),
-    roi,
-    lane_color,
-    reinforce_with_hsv=True,
-)
+        return yaml.safe_load(f)
 
 
 # ============================================================
-# READ VIDEO FRAME
+# READ FRAME
 # ============================================================
 
-cap = cv2.VideoCapture(INPUT)
-
-if not cap.isOpened():
-    raise RuntimeError(
-        f"Could not open video: {INPUT}"
-    )
-
-
-fps = cap.get(
-    cv2.CAP_PROP_FPS
-)
-
-if fps <= 0:
-    fps = 25.0
-
-
-frame_number = int(
-    TIME * fps
-)
-
-
-cap.set(
-    cv2.CAP_PROP_POS_FRAMES,
-    frame_number
-)
-
-
-ok, frame = cap.read()
-
-cap.release()
-
-
-if not ok:
-    raise RuntimeError(
-        f"Could not read frame {frame_number}"
-    )
-
-
-h, w = frame.shape[:2]
-
-
-# ============================================================
-# HORIZON
-# ============================================================
-
-horizon_y = horizon.detect(frame)
-
-
-# ============================================================
-# LANE EDGE PIPELINE
-# ============================================================
-
-edges_roi, edges_raw, hsv_hits = (
-    edges_module.compute(
-        frame,
-        top_y_override=horizon_y
-    )
-)
-
-
-# ============================================================
-# HISTOGRAM
-# ============================================================
-
-# Same histogram logic used by LaneFitter.
-
-bottom = edges_roi[
-    int(h * 0.70):,
-    :
-]
-
-
-histogram = np.sum(
-    bottom > 0,
-    axis=0
-).astype(np.float32)
-
-
-# Smooth histogram.
-
-kernel = np.ones(
-    15,
-    dtype=np.float32
-) / 15.0
-
-
-histogram = np.convolve(
-    histogram,
-    kernel,
-    mode="same"
-)
-
-
-# ------------------------------------------------------------
-# LEFT BASE
-# ------------------------------------------------------------
-
-left_lo = 0
-left_hi = int(
-    0.45 * w
-)
-
-
-left_histogram = histogram[
-    left_lo:left_hi
-]
-
-
-if left_histogram.max() > 0:
-
-    left_base = (
-        left_lo
-        + int(
-            np.argmax(
-                left_histogram
-            )
-        )
-    )
-
-else:
-
-    left_base = int(
-        0.25 * w
-    )
-
-
-# ------------------------------------------------------------
-# RIGHT BASE
-# ------------------------------------------------------------
-
-right_lo = int(
-    0.55 * w
-)
-
-right_hi = w
-
-
-right_histogram = histogram[
-    right_lo:right_hi
-]
-
-
-if right_histogram.max() > 0:
-
-    right_base = (
-        right_lo
-        + int(
-            np.argmax(
-                right_histogram
-            )
-        )
-    )
-
-else:
-
-    right_base = int(
-        0.75 * w
-    )
-
-
-# ============================================================
-# VISUALIZATION IMAGE
-# ============================================================
-
-vis = frame.copy()
-
-# Slightly darken the original image so
-# the windows and lane pixels are easier to see.
-
-vis = (
-    vis.astype(np.float32) * 0.75
-).astype(np.uint8)
-
-
-# ============================================================
-# DRAW ROI TRAPEZOID
-# ============================================================
-
-vertices = cfg.get(
-    "roi",
-    {}
-).get(
-    "vertices"
-)
-
-
-if not vertices:
-
-    vertices = [
-        [0.10, 0.90],
-        [0.30, 0.55],
-        [0.70, 0.55],
-        [0.90, 0.90],
-    ]
-
-
-roi_points = np.array(
-    [
-        [
-            int(x * w),
-            int(y * h)
-        ]
-
-        for x, y in vertices
-    ],
-    dtype=np.int32
-)
-
-
-cv2.polylines(
-    vis,
-    [roi_points],
-    True,
-    (255, 255, 0),
-    2
-)
-
-
-# ============================================================
-# DRAW HORIZON
-# ============================================================
-
-if horizon_y is not None:
-
-    cv2.line(
-        vis,
-        (0, horizon_y),
-        (w - 1, horizon_y),
-        (0, 255, 255),
-        2
-    )
-
-
-# ============================================================
-# DRAW BASE POINTS
-# ============================================================
-
-cv2.circle(
-    vis,
-    (left_base, h - 10),
-    7,
-    (0, 255, 255),
-    -1
-)
-
-
-cv2.circle(
-    vis,
-    (right_base, h - 10),
-    7,
-    (0, 255, 0),
-    -1
-)
-
-
-# ============================================================
-# SLIDING WINDOW SETTINGS
-# ============================================================
-
-sliding_cfg = cfg.get(
-    "sliding_window",
-    {}
-)
-
-
-n_windows = int(
-    sliding_cfg.get(
-        "n_windows",
-        9
-    )
-)
-
-
-window_width_frac = float(
-    sliding_cfg.get(
-        "window_width_frac",
-        0.12
-    )
-)
-
-
-min_pixels_per_window = int(
-    sliding_cfg.get(
-        "min_pixels_per_window",
-        6
-    )
-)
-
-
-min_pixels_to_recenter = int(
-    sliding_cfg.get(
-        "min_pixels_to_recenter",
-        12
-    )
-)
-
-
-max_recenter_jump_frac = float(
-    sliding_cfg.get(
-        "max_recenter_jump_frac",
-        0.12
-    )
-)
-
-
-left_max_x_frac = float(
-    sliding_cfg.get(
-        "left_max_x_frac",
-        0.58
-    )
-)
-
-
-right_min_x_frac = float(
-    sliding_cfg.get(
-        "right_min_x_frac",
-        0.42
-    )
-)
-
-
-# ============================================================
-# WINDOW DIMENSIONS
-# ============================================================
-
-window_width = max(
-    24,
-    int(
-        window_width_frac * w
-    )
-)
-
-
-window_height = h // n_windows
-
-
-max_recenter_jump = int(
-    max_recenter_jump_frac * w
-)
-
-
-# ============================================================
-# GET EDGE PIXELS
-# ============================================================
-
-nonzero_y, nonzero_x = np.nonzero(
-    edges_roi
-)
-
-
-# ============================================================
-# DRAW SLIDING WINDOWS
-# ============================================================
-
-def draw_windows(
-    base_x,
-    side,
-    color
+def get_frame(
+    video_path,
+    time_s
 ):
 
-    current_x = int(base_x)
-
-    print()
-    print(
-        f"{side.upper()} WINDOWS"
+    reader = VideoReader(
+        video_path
     )
 
-    print(
-        "-" * 50
+    fps = reader.info.fps
+
+    frame_idx = int(
+        round(
+            time_s * fps
+        )
     )
+
+    frame = reader.read_frame(
+        frame_idx
+    )
+
+    reader.release()
+
+    if frame is None:
+
+        raise RuntimeError(
+            f"Could not read frame {frame_idx}"
+        )
+
+    return (
+        frame,
+        frame_idx,
+        frame_idx / fps
+    )
+
+
+# ============================================================
+# INSPECT WINDOWS
+# ============================================================
+
+def inspect_side(
+    mask,
+    x_base,
+    cfg
+):
+
+    h, w = mask.shape[:2]
+
+    n_windows = max(
+        1,
+        cfg.n_windows
+    )
+
+    window_width = max(
+        20,
+        int(
+            cfg.window_width_frac
+            * w
+        )
+    )
+
+    window_height = max(
+        1,
+        h // n_windows
+    )
+
+    max_jump = (
+        cfg.max_recenter_jump_frac
+        * w
+    )
+
+    nonzero_y, nonzero_x = np.nonzero(
+        mask
+    )
+
+    current_x = float(
+        x_base
+    )
+
+    results = []
 
     for i in range(
         n_windows
     ):
 
-        # ----------------------------------------------------
-        # Vertical position
-        # ----------------------------------------------------
-
         y_low = (
             h
-            - (i + 1) * window_height
+            - (i + 1)
+            * window_height
         )
 
         y_high = (
             h
-            - i * window_height
+            - i
+            * window_height
         )
 
+        y_low = max(
+            0,
+            y_low
+        )
 
-        # ----------------------------------------------------
-        # Horizontal position
-        # ----------------------------------------------------
+        y_high = min(
+            h,
+            y_high
+        )
 
-        x_low = (
+        x_low = int(
             current_x
-            - window_width // 2
+            - window_width / 2
         )
 
-        x_high = (
+        x_high = int(
             current_x
-            + window_width // 2
+            + window_width / 2
         )
-
-
-        # ----------------------------------------------------
-        # Keep window on correct side
-        # ----------------------------------------------------
-
-        if side == "left":
-
-            x_high = min(
-                x_high,
-                int(
-                    left_max_x_frac
-                    * w
-                )
-            )
-
-        else:
-
-            x_low = max(
-                x_low,
-                int(
-                    right_min_x_frac
-                    * w
-                )
-            )
-
-
-        # ----------------------------------------------------
-        # Find edge pixels inside window
-        # ----------------------------------------------------
 
         selection = (
             (nonzero_y >= y_low)
@@ -550,280 +196,622 @@ def draw_windows(
             (nonzero_x < x_high)
         )
 
-
-        ys = nonzero_y[
-            selection
-        ]
-
         xs = nonzero_x[
             selection
         ]
 
-
-        pixel_count = len(
-            xs
-        )
-
-
-        # ----------------------------------------------------
-        # Draw window
-        # ----------------------------------------------------
-
-        cv2.rectangle(
-            vis,
-            (x_low, y_low),
-            (x_high, y_high),
-            color,
-            2
-        )
-
-
-        # ----------------------------------------------------
-        # Draw selected pixels
-        # ----------------------------------------------------
-
-        if pixel_count >= min_pixels_per_window:
-
-            for x, y in zip(
-                xs,
-                ys
-            ):
-
-                cv2.circle(
-                    vis,
-                    (int(x), int(y)),
-                    1,
-                    color,
-                    -1
-                )
-
-
-        # ----------------------------------------------------
-        # Calculate new center
-        # ----------------------------------------------------
+        pixel_count = len(xs)
 
         old_x = current_x
 
         recentered = False
 
-        if (
-            pixel_count
-            >= min_pixels_to_recenter
+        if pixel_count >= (
+            cfg.min_pixels_per_window
         ):
 
-            proposed_x = int(
-                np.median(xs)
-            )
+            if pixel_count >= (
+                cfg.min_pixels_to_recenter
+            ):
 
-            jump = (
-                proposed_x
-                - current_x
-            )
+                new_x = float(
+                    np.median(xs)
+                )
 
+                delta = (
+                    new_x
+                    - current_x
+                )
 
-            if abs(jump) <= max_recenter_jump:
+                if abs(delta) > max_jump:
 
-                current_x = proposed_x
+                    if delta > 0:
+
+                        new_x = (
+                            current_x
+                            + max_jump
+                        )
+
+                    else:
+
+                        new_x = (
+                            current_x
+                            - max_jump
+                        )
+
+                current_x = new_x
 
                 recentered = True
 
+        results.append({
+            "window": i + 1,
+            "x_before": old_x,
+            "x_after": current_x,
+            "y_low": y_low,
+            "y_high": y_high,
+            "pixels": pixel_count,
+            "recentered": recentered
+        })
 
-        # ----------------------------------------------------
-        # Label
-        # ----------------------------------------------------
+    return results
 
-        label = (
-            f"{side[0].upper()}{i + 1}: "
-            f"{pixel_count}px"
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--input",
+        default="data/VBOX0011_Trim.mp4"
+    )
+
+    parser.add_argument(
+        "--time",
+        type=float,
+        default=720.0
+    )
+
+    parser.add_argument(
+        "--config",
+        default="config/default.yaml"
+    )
+
+    parser.add_argument(
+        "--output",
+        default="outputs/sliding_windows_check.png"
+    )
+
+    args = parser.parse_args()
+
+    os.makedirs(
+        os.path.dirname(
+            args.output
+        ) or ".",
+        exist_ok=True
+    )
+
+    # --------------------------------------------------------
+    # CONFIG
+    # --------------------------------------------------------
+
+    cfg = load_config(
+        args.config
+    )
+
+    sw_cfg = SlidingWindowConfig.from_dict(
+        cfg.get(
+            "sliding_window",
+            {}
+        )
+    )
+
+    # --------------------------------------------------------
+    # FRAME
+    # --------------------------------------------------------
+
+    frame, frame_idx, timestamp = get_frame(
+        args.input,
+        args.time
+    )
+
+    h, w = frame.shape[:2]
+
+    window_width = max(
+        20,
+        int(
+            sw_cfg.window_width_frac
+            * w
+        )
+    )
+
+    window_height = max(
+        1,
+        h // sw_cfg.n_windows
+    )
+
+    # --------------------------------------------------------
+    # ARTIFACT
+    # --------------------------------------------------------
+
+    artifact = ArtifactMask(
+        ArtifactMaskConfig.from_dict(
+            cfg.get(
+                "artifact_mask",
+                {}
+            )
+        )
+    )
+
+    processed = artifact.apply(
+        frame
+    )
+
+    # --------------------------------------------------------
+    # HORIZON
+    # --------------------------------------------------------
+
+    horizon_detector = HorizonDetector(
+        HorizonConfig.from_dict(
+            cfg.get(
+                "horizon",
+                {}
+            )
+        )
+    )
+
+    horizon_y = horizon_detector.detect(
+        processed
+    )
+
+    # --------------------------------------------------------
+    # ROI
+    # --------------------------------------------------------
+
+    roi = LaneROI(
+        RoiConfig.from_dict(
+            cfg.get(
+                "roi",
+                {}
+            )
+        )
+    )
+
+    # --------------------------------------------------------
+    # LANE COLOR
+    # --------------------------------------------------------
+
+    lane_color = LaneColor(
+        LaneColorConfig.from_dict(
+            cfg.get(
+                "lane_color",
+                {}
+            )
+        )
+    )
+
+    # --------------------------------------------------------
+    # EDGES
+    # --------------------------------------------------------
+
+    edges = LaneEdges(
+        CannyConfig.from_dict(
+            cfg.get(
+                "canny",
+                {}
+            )
+        ),
+        roi,
+        lane_color,
+        reinforce_with_hsv=True
+    )
+
+    edges_roi, _, _ = edges.compute(
+        processed,
+        top_y_override=horizon_y
+    )
+
+    # ========================================================
+    # HISTOGRAM
+    # ========================================================
+
+    bottom = edges_roi[
+        int(h * 0.70):,
+        :
+    ]
+
+    histogram = np.sum(
+        bottom > 0,
+        axis=0
+    ).astype(
+        np.float32
+    )
+
+    kernel = (
+        np.ones(
+            15,
+            dtype=np.float32
+        ) / 15.0
+    )
+
+    histogram = np.convolve(
+        histogram,
+        kernel,
+        mode="same"
+    )
+
+    # --------------------------------------------------------
+    # LEFT BASE
+    # --------------------------------------------------------
+
+    left_hi = int(
+        0.45 * w
+    )
+
+    left_segment = histogram[
+        :left_hi
+    ]
+
+    if left_segment.max() > 0:
+
+        left_base = int(
+            np.argmax(
+                left_segment
+            )
         )
 
+    else:
+
+        left_base = int(
+            0.25 * w
+        )
+
+    left_base = max(
+        0,
+        left_base
+        - sw_cfg.left_base_shift_px
+    )
+
+    # --------------------------------------------------------
+    # RIGHT BASE
+    # --------------------------------------------------------
+
+    right_lo = int(
+        0.55 * w
+    )
+
+    right_segment = histogram[
+        right_lo:
+    ]
+
+    if right_segment.max() > 0:
+
+        right_base = (
+            right_lo
+            + int(
+                np.argmax(
+                    right_segment
+                )
+            )
+        )
+
+    else:
+
+        right_base = int(
+            0.75 * w
+        )
+
+    right_base = min(
+        w - 1,
+        right_base
+        + sw_cfg.right_base_shift_px
+    )
+
+    # ========================================================
+    # WINDOWS
+    # ========================================================
+
+    left_results = inspect_side(
+        edges_roi,
+        left_base,
+        sw_cfg
+    )
+
+    right_results = inspect_side(
+        edges_roi,
+        right_base,
+        sw_cfg
+    )
+
+    # ========================================================
+    # DRAW
+    # ========================================================
+
+    output = frame.copy()
+
+    if horizon_y is not None:
+
+        cv2.line(
+            output,
+            (0, horizon_y),
+            (w, horizon_y),
+            (0, 255, 255),
+            2
+        )
+
+    # --------------------------------------------------------
+    # LEFT WINDOWS
+    # --------------------------------------------------------
+
+    for r in left_results:
+
+        x = int(
+            r["x_before"]
+        )
+
+        x1 = int(
+            x - window_width / 2
+        )
+
+        x2 = int(
+            x + window_width / 2
+        )
+
+        cv2.rectangle(
+            output,
+            (
+                x1,
+                r["y_low"]
+            ),
+            (
+                x2,
+                r["y_high"]
+            ),
+            (0, 255, 255),
+            2
+        )
 
         cv2.putText(
-            vis,
-            label,
+            output,
+            f"L{r['window']}: "
+            f"{r['pixels']}px",
             (
-                max(
-                    2,
-                    x_low + 3
-                ),
-                min(
-                    h - 5,
-                    y_low + 18
-                )
+                x1 + 4,
+                r["y_low"] + 16
             ),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.40,
-            color,
+            0.42,
+            (0, 255, 255),
             1,
             cv2.LINE_AA
         )
 
+    # --------------------------------------------------------
+    # RIGHT WINDOWS
+    # --------------------------------------------------------
 
-        # ----------------------------------------------------
-        # Terminal diagnostics
-        # ----------------------------------------------------
+    for r in right_results:
 
-        print(
-            f"W{i + 1}: "
-            f"x={old_x:3d} -> "
-            f"{current_x:3d} | "
-            f"pixels={pixel_count:4d} | "
-            f"recenter={recentered}"
+        x = int(
+            r["x_before"]
         )
 
+        x1 = int(
+            x - window_width / 2
+        )
 
-# ============================================================
-# LEFT WINDOWS
-# ============================================================
+        x2 = int(
+            x + window_width / 2
+        )
 
-draw_windows(
-    left_base,
-    "left",
-    (0, 255, 255)
-)
+        cv2.rectangle(
+            output,
+            (
+                x1,
+                r["y_low"]
+            ),
+            (
+                x2,
+                r["y_high"]
+            ),
+            (0, 255, 0),
+            2
+        )
 
+        cv2.putText(
+            output,
+            f"R{r['window']}: "
+            f"{r['pixels']}px",
+            (
+                x1 + 4,
+                r["y_low"] + 16
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.42,
+            (0, 255, 0),
+            1,
+            cv2.LINE_AA
+        )
 
-# ============================================================
-# RIGHT WINDOWS
-# ============================================================
+    # --------------------------------------------------------
+    # BASE DOTS
+    # --------------------------------------------------------
 
-draw_windows(
-    right_base,
-    "right",
-    (0, 255, 0)
-)
-
-
-# ============================================================
-# INFORMATION TEXT
-# ============================================================
-
-cv2.putText(
-    vis,
-    f"Horizon: {horizon_y}",
-    (10, 25),
-    cv2.FONT_HERSHEY_SIMPLEX,
-    0.60,
-    (255, 255, 255),
-    2,
-    cv2.LINE_AA
-)
-
-
-cv2.putText(
-    vis,
-    f"Left base: {left_base}",
-    (10, 50),
-    cv2.FONT_HERSHEY_SIMPLEX,
-    0.60,
-    (0, 255, 255),
-    2,
-    cv2.LINE_AA
-)
-
-
-cv2.putText(
-    vis,
-    f"Right base: {right_base}",
-    (10, 75),
-    cv2.FONT_HERSHEY_SIMPLEX,
-    0.60,
-    (0, 255, 0),
-    2,
-    cv2.LINE_AA
-)
-
-
-cv2.putText(
-    vis,
-    f"Window: {window_width} x {window_height}",
-    (10, 100),
-    cv2.FONT_HERSHEY_SIMPLEX,
-    0.60,
-    (255, 255, 255),
-    2,
-    cv2.LINE_AA
-)
-
-
-# ============================================================
-# SAVE
-# ============================================================
-
-os.makedirs(
-    "outputs",
-    exist_ok=True
-)
-
-
-success = cv2.imwrite(
-    OUTPUT,
-    vis
-)
-
-
-if not success:
-
-    raise RuntimeError(
-        f"Could not save: {OUTPUT}"
+    cv2.circle(
+        output,
+        (
+            int(left_base),
+            h - 10
+        ),
+        7,
+        (0, 255, 255),
+        -1
     )
 
+    cv2.circle(
+        output,
+        (
+            int(right_base),
+            h - 10
+        ),
+        7,
+        (0, 255, 0),
+        -1
+    )
 
-# ============================================================
-# FINAL TERMINAL OUTPUT
-# ============================================================
+    # --------------------------------------------------------
+    # TEXT
+    # --------------------------------------------------------
 
-print()
-print(
-    "=" * 60
-)
+    cv2.putText(
+        output,
+        f"Horizon: {horizon_y}",
+        (10, 25),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.60,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA
+    )
 
-print(
-    "SLIDING WINDOW INSPECTION"
-)
+    cv2.putText(
+        output,
+        f"Left base: {left_base}",
+        (10, 50),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.60,
+        (0, 255, 255),
+        2,
+        cv2.LINE_AA
+    )
 
-print(
-    "=" * 60
-)
+    cv2.putText(
+        output,
+        f"Right base: {right_base}",
+        (10, 75),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.60,
+        (0, 255, 0),
+        2,
+        cv2.LINE_AA
+    )
 
-print(
-    f"Input       : {INPUT}"
-)
+    cv2.putText(
+        output,
+        f"Window: "
+        f"{window_width} x "
+        f"{window_height}",
+        (10, 100),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.60,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA
+    )
 
-print(
-    f"Time        : {TIME:.2f} s"
-)
+    # --------------------------------------------------------
+    # SAVE
+    # --------------------------------------------------------
 
-print(
-    f"Frame       : {frame_number}"
-)
+    cv2.imwrite(
+        args.output,
+        output
+    )
 
-print(
-    f"Resolution  : {w} x {h}"
-)
+    # ========================================================
+    # TERMINAL
+    # ========================================================
 
-print(
-    f"Horizon     : {horizon_y}"
-)
+    print()
+    print("=" * 60)
+    print("SLIDING WINDOW INSPECTION")
+    print("=" * 60)
 
-print(
-    f"Left base   : {left_base}"
-)
+    print(
+        f"Input       : {args.input}"
+    )
 
-print(
-    f"Right base  : {right_base}"
-)
+    print(
+        f"Time        : {timestamp:.2f} s"
+    )
 
-print(
-    f"Window size : "
-    f"{window_width} x "
-    f"{window_height}"
-)
+    print(
+        f"Frame       : {frame_idx}"
+    )
 
-print(
-    f"Output      : {OUTPUT}"
-)
+    print(
+        f"Resolution  : {w} x {h}"
+    )
 
-print(
-    "=" * 60
-)
+    print(
+        f"Horizon     : {horizon_y}"
+    )
+
+    print(
+        f"Left base   : {left_base}"
+    )
+
+    print(
+        f"Right base  : {right_base}"
+    )
+
+    print(
+        f"Window size : "
+        f"{window_width} x "
+        f"{window_height}"
+    )
+
+    print(
+        f"Left shift  : "
+        f"-{sw_cfg.left_base_shift_px} px"
+    )
+
+    print(
+        f"Right shift : "
+        f"+{sw_cfg.right_base_shift_px} px"
+    )
+
+    print(
+        f"Output      : {args.output}"
+    )
+
+    print("=" * 60)
+
+    print()
+    print("LEFT WINDOWS")
+    print("-" * 50)
+
+    for r in left_results:
+
+        print(
+            f"W{r['window']:02d}: "
+            f"x={r['x_before']:.0f}"
+            f" -> "
+            f"{r['x_after']:.0f} | "
+            f"pixels={r['pixels']:4d} | "
+            f"recenter={r['recentered']}"
+        )
+
+    print()
+    print("RIGHT WINDOWS")
+    print("-" * 50)
+
+    for r in right_results:
+
+        print(
+            f"W{r['window']:02d}: "
+            f"x={r['x_before']:.0f}"
+            f" -> "
+            f"{r['x_after']:.0f} | "
+            f"pixels={r['pixels']:4d} | "
+            f"recenter={r['recentered']}"
+        )
+
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
