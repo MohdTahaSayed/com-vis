@@ -16,7 +16,6 @@ PROJECT_ROOT = os.path.abspath(
 )
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.artifact_mask import ArtifactMask, ArtifactMaskConfig
 from src.horizon import HorizonDetector, HorizonConfig
 from src.lane_color import LaneColor, LaneColorConfig
 from src.lane_roi import LaneROI, RoiConfig
@@ -224,12 +223,6 @@ def main():
     # Initialize modules
     # --------------------------------------------------------
 
-    artifact_mask = ArtifactMask(
-        ArtifactMaskConfig.from_dict(
-            cfg.get("artifact_mask", {})
-        )
-    )
-
     horizon = HorizonDetector(
         HorizonConfig.from_dict(
             cfg.get("horizon", {})
@@ -284,23 +277,17 @@ def main():
     h, w = frame.shape[:2]
 
     # --------------------------------------------------------
-    # Stage 0: Artifact mask
-    # --------------------------------------------------------
-
-    masked_frame = artifact_mask.apply(frame)
-
-    # --------------------------------------------------------
     # Stage 1A: Horizon detection
     # --------------------------------------------------------
 
-    horizon_y = horizon.detect(masked_frame)
+    horizon_y = horizon.detect(frame)
 
     # --------------------------------------------------------
     # Stage 1B: Canny + ROI + HSV reinforcement
     # --------------------------------------------------------
 
     edges_roi, edges_raw, hsv_hits = edges_module.compute(
-        masked_frame,
+        frame,
         top_y_override=horizon_y,
     )
 

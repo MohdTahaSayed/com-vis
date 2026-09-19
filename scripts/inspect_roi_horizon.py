@@ -29,7 +29,7 @@ from src.io_video import VideoReader
 INPUT = "data/VBOX0011_Trim.mp4"
 
 # Change this to inspect another point in the video
-TIME = 360.0
+TIME = 756.0
 
 OUTPUT = "outputs/roi_horizon_check.png"
 
