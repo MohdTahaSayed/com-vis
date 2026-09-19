@@ -1,15 +1,4 @@
-"""
-Lane polynomial fitting using histogram + sliding windows.
-
-This module:
-1. Builds a bottom-region histogram of lane pixels.
-2. Finds left/right starting positions.
-3. Tracks lane pixels using sliding windows.
-4. Fits a quadratic polynomial x = ay^2 + by + c.
-5. Rejects only fits that have insufficient pixels or excessive RMS error.
-
-Geometric lane validation is handled separately by lane_validation.py.
-"""
+from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional, Tuple
@@ -17,10 +6,6 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
-
-# ============================================================
-# DATA STRUCTURES
-# ============================================================
 
 @dataclass
 class LaneFitResult:
@@ -68,25 +53,23 @@ class SlidingWindowConfig:
 
     check_curve_direction: bool = True
 
-    # These are kept configurable because the previous
-    # implementation used shifted histogram centers.
     left_base_shift_px: int = 0
     right_base_shift_px: int = 0
 
-    # --------------------------------------------------------
-    # TEMPORAL TRACKING
-    # --------------------------------------------------------
-    # When enabled, the sliding windows are positioned from
-    # the previous frame's polynomial instead of from the
-    # current frame's histogram. This stabilizes tracking.
+    # Temporal tracking
     tracking_enabled: bool = True
     tracking_margin_px: int = 70
 
     @classmethod
     def from_dict(cls, d):
+
         return cls(
-            n_windows=int(d.get("n_windows", 20)),
-            window_width_frac=float(d.get("window_width_frac", 0.15)),
+            n_windows=int(
+                d.get("n_windows", 20)
+            ),
+            window_width_frac=float(
+                d.get("window_width_frac", 0.15)
+            ),
             min_pixels_to_recenter=int(
                 d.get("min_pixels_to_recenter", 12)
             ),
@@ -129,20 +112,7 @@ class SlidingWindowConfig:
         )
 
 
-# ============================================================
-# MAIN FITTER
-# ============================================================
-
 class LaneFitter:
-    """
-    Histogram + sliding-window lane detector.
-
-    Input:
-        Binary lane-pixel image.
-
-    Output:
-        Left and right quadratic lane fits.
-    """
 
     def __init__(self, config=None):
 
@@ -150,11 +120,9 @@ class LaneFitter:
             self.cfg = SlidingWindowConfig()
 
         elif isinstance(config, SlidingWindowConfig):
-            # test_stage1.py already created the config object
             self.cfg = config
 
         elif isinstance(config, dict):
-            # Config was supplied as a dictionary
             self.cfg = SlidingWindowConfig.from_dict(config)
 
         else:
@@ -174,8 +142,6 @@ class LaneFitter:
 
         h, w = binary.shape[:2]
 
-        # Use lower 30% of image.
-        # This is where lane lines are usually strongest.
         bottom_start = int(h * 0.70)
 
         histogram = np.sum(
@@ -183,11 +149,15 @@ class LaneFitter:
             axis=0
         ).astype(np.float32)
 
-        # Smooth histogram to reduce isolated peaks.
         kernel_size = 15
 
         if w >= kernel_size:
-            kernel = np.ones(kernel_size, dtype=np.float32)
+
+            kernel = np.ones(
+                kernel_size,
+                dtype=np.float32
+            )
+
             kernel /= kernel.sum()
 
             histogram_smooth = np.convolve(
@@ -195,33 +165,34 @@ class LaneFitter:
                 kernel,
                 mode="same"
             )
+
         else:
             histogram_smooth = histogram
 
-        # ----------------------------------------------------
-        # LEFT HALF
-        # ----------------------------------------------------
+        # LEFT
 
         left_end = int(w * 0.45)
 
         left_region = histogram_smooth[:left_end]
 
         if np.max(left_region) > 0:
-            left_base = int(np.argmax(left_region))
+            left_base = int(
+                np.argmax(left_region)
+            )
         else:
             left_base = int(w * 0.25)
 
-        # Optional configurable shift.
         left_base += self.cfg.left_base_shift_px
 
-        # Keep inside image.
         left_base = int(
-            np.clip(left_base, 0, w - 1)
+            np.clip(
+                left_base,
+                0,
+                w - 1
+            )
         )
 
-        # ----------------------------------------------------
-        # RIGHT HALF
-        # ----------------------------------------------------
+        # RIGHT
 
         right_start = int(w * 0.55)
 
@@ -235,12 +206,14 @@ class LaneFitter:
         else:
             right_base = int(w * 0.75)
 
-        # Optional configurable shift.
         right_base += self.cfg.right_base_shift_px
 
-        # Keep inside image.
         right_base = int(
-            np.clip(right_base, 0, w - 1)
+            np.clip(
+                right_base,
+                0,
+                w - 1
+            )
         )
 
         return (
@@ -250,7 +223,7 @@ class LaneFitter:
         )
 
     # ========================================================
-    # SLIDING WINDOWS
+    # COLLECT SIDE PIXELS
     # ========================================================
 
     def _collect_side_pixels(
@@ -263,7 +236,9 @@ class LaneFitter:
 
         h, w = binary.shape[:2]
 
-        nonzero_y, nonzero_x = np.nonzero(binary > 0)
+        nonzero_y, nonzero_x = np.nonzero(
+            binary > 0
+        )
 
         if len(nonzero_x) == 0:
             return (
@@ -280,7 +255,9 @@ class LaneFitter:
 
         window_width = max(
             10,
-            int(w * self.cfg.window_width_frac)
+            int(
+                w * self.cfg.window_width_frac
+            )
         )
 
         collected_x = []
@@ -290,23 +267,24 @@ class LaneFitter:
 
         for window in range(n_windows):
 
-            y_high = h - window * window_height
+            y_high = (
+                h - window * window_height
+            )
+
             y_low = max(
                 0,
                 h - (window + 1) * window_height
             )
 
-            # ====================================================
-            # DETERMINE EXPECTED LANE POSITION
-            # ====================================================
+            # ------------------------------------------------
+            # TEMPORAL TRACKING
+            # ------------------------------------------------
 
             if (
                 self.cfg.tracking_enabled
                 and previous_coeffs is not None
             ):
 
-                # Instead of treating the whole 70 px region as
-                # lane pixels, predict the lane centre.
                 y_center = (
                     y_low + y_high
                 ) / 2.0
@@ -330,7 +308,6 @@ class LaneFitter:
                     round(predicted_x)
                 )
 
-                # Keep the existing tracking margin.
                 search_half_width = (
                     self.cfg.tracking_margin_px
                 )
@@ -340,10 +317,6 @@ class LaneFitter:
                 search_half_width = (
                     window_width // 2
                 )
-
-            # ====================================================
-            # SEARCH REGION
-            # ====================================================
 
             search_x_low = max(
                 0,
@@ -368,10 +341,9 @@ class LaneFitter:
             if len(candidate_x) == 0:
                 continue
 
-            # ====================================================
-            # TEMPORAL MODE:
-            # KEEP ONLY PIXELS CLOSEST TO PREDICTION
-            # ====================================================
+            # ------------------------------------------------
+            # TEMPORAL PIXEL FILTER
+            # ------------------------------------------------
 
             if (
                 self.cfg.tracking_enabled
@@ -384,52 +356,58 @@ class LaneFitter:
                 )
 
                 distance = np.abs(
-                    candidate_x - predicted_for_pixels
+                    candidate_x
+                    - predicted_for_pixels
                 )
 
-                # Use the existing window width as the lane
-                # neighbourhood. This prevents unrelated edges
-                # inside the 70 px search region from contaminating
-                # the polynomial.
-                pixel_limit = window_width / 2.0
+                pixel_limit = (
+                    window_width / 2.0
+                )
 
-                keep = distance <= pixel_limit
+                keep = (
+                    distance <= pixel_limit
+                )
 
                 candidate_x = candidate_x[keep]
                 candidate_y = candidate_y[keep]
 
-            # ====================================================
-            # COLLECT
-            # ====================================================
-
             if len(candidate_x) == 0:
                 continue
 
-            collected_x.append(candidate_x)
-            collected_y.append(candidate_y)
+            collected_x.append(
+                candidate_x
+            )
 
-            # ====================================================
+            collected_y.append(
+                candidate_y
+            )
+
+            # ------------------------------------------------
             # RECENTER
-            # ====================================================
+            # ------------------------------------------------
 
-            if len(candidate_x) >= self.cfg.min_pixels_to_recenter:
+            if (
+                len(candidate_x)
+                >= self.cfg.min_pixels_to_recenter
+            ):
 
                 new_x = int(
                     np.median(candidate_x)
                 )
 
                 max_jump = int(
-                    w * self.cfg.max_recenter_jump_frac
+                    w
+                    * self.cfg.max_recenter_jump_frac
                 )
 
-                if abs(new_x - current_x) <= max_jump:
+                if (
+                    abs(new_x - current_x)
+                    <= max_jump
+                ):
                     current_x = new_x
 
-        # ========================================================
-        # COMBINE
-        # ========================================================
-
         if len(collected_x) == 0:
+
             return (
                 np.array([], dtype=np.int32),
                 np.array([], dtype=np.int32)
@@ -443,7 +421,10 @@ class LaneFitter:
             collected_y
         )
 
-        return x_pixels, y_pixels
+        return (
+            x_pixels,
+            y_pixels
+        )
 
     # ========================================================
     # POLYNOMIAL FIT
@@ -453,19 +434,24 @@ class LaneFitter:
         self,
         x_pixels: np.ndarray,
         y_pixels: np.ndarray
-    ) -> Tuple[Optional[np.ndarray], float]:
+    ):
 
         if len(x_pixels) < self.cfg.min_pixels_total:
             return None, float("inf")
 
         try:
-            # x = ay² + by + c
+
             coeffs = np.polyfit(
                 y_pixels,
                 x_pixels,
                 2
             )
-        except (np.linalg.LinAlgError, ValueError):
+
+        except (
+            np.linalg.LinAlgError,
+            ValueError
+        ):
+
             return None, float("inf")
 
         predicted_x = np.polyval(
@@ -473,7 +459,9 @@ class LaneFitter:
             y_pixels
         )
 
-        residuals = x_pixels - predicted_x
+        residuals = (
+            x_pixels - predicted_x
+        )
 
         rms = float(
             np.sqrt(
@@ -491,34 +479,40 @@ class LaneFitter:
 
     def _check_curve_direction(
         self,
-        coeffs: np.ndarray,
-        height: int,
-        side: str
-    ) -> bool:
+        coeffs,
+        height,
+        side
+    ):
 
         if not self.cfg.check_curve_direction:
             return True
 
-        y_bottom = int(height * 0.90)
-        y_top = int(height * 0.55)
+        y_bottom = int(
+            height * 0.90
+        )
+
+        y_top = int(
+            height * 0.55
+        )
 
         x_bottom = float(
-            np.polyval(coeffs, y_bottom)
+            np.polyval(
+                coeffs,
+                y_bottom
+            )
         )
 
         x_top = float(
-            np.polyval(coeffs, y_top)
+            np.polyval(
+                coeffs,
+                y_top
+            )
         )
 
         if side == "left":
-
-            # In image coordinates:
-            # left lane should move toward the
-            # vanishing point as y decreases.
             return x_bottom < x_top
 
         elif side == "right":
-
             return x_bottom > x_top
 
         return True
@@ -529,23 +523,14 @@ class LaneFitter:
 
     def _check_temporal_consistency(
         self,
-        candidate_coeffs: np.ndarray,
-        previous_coeffs: Optional[np.ndarray],
-        height: int
-    ) -> bool:
-        """
-        Check whether the newly fitted lane is reasonably close
-        to the lane detected in the previous frame.
+        candidate_coeffs,
+        previous_coeffs,
+        height
+    ):
 
-        The existing tracking_margin_px is used as the maximum
-        allowed displacement. No new tuning parameter is introduced.
-        """
-
-        # No previous lane -> nothing to compare against.
         if previous_coeffs is None:
             return True
 
-        # Evaluate both curves over the useful lane region.
         y_values = np.linspace(
             int(height * 0.62),
             int(height * 0.95),
@@ -562,7 +547,6 @@ class LaneFitter:
             y_values
         )
 
-        # Difference between previous and current lane.
         displacement = np.abs(
             candidate_x - previous_x
         )
@@ -571,8 +555,10 @@ class LaneFitter:
             np.max(displacement)
         )
 
-        # Use the EXISTING tracking margin.
-        return max_displacement <= self.cfg.tracking_margin_px
+        return (
+            max_displacement
+            <= self.cfg.tracking_margin_px
+        )
 
     # ========================================================
     # SIDE FIT
@@ -580,19 +566,21 @@ class LaneFitter:
 
     def _fit_side(
         self,
-        binary: np.ndarray,
-        x_base: int,
-        side: str,
-        previous_coeffs: Optional[np.ndarray] = None
-    ) -> LaneFitResult:
+        binary,
+        x_base,
+        side,
+        previous_coeffs=None
+    ):
 
         h, w = binary.shape[:2]
 
-        x_pixels, y_pixels = self._collect_side_pixels(
-            binary,
-            x_base,
-            side,
-            previous_coeffs
+        x_pixels, y_pixels = (
+            self._collect_side_pixels(
+                binary,
+                x_base,
+                side,
+                previous_coeffs
+            )
         )
 
         n_pixels = len(x_pixels)
@@ -600,7 +588,10 @@ class LaneFitter:
         confidence = min(
             1.0,
             n_pixels / float(
-                max(1, self.cfg.min_pixels_total * 3)
+                max(
+                    1,
+                    self.cfg.min_pixels_total * 3
+                )
             )
         )
 
@@ -613,16 +604,11 @@ class LaneFitter:
             y_pixels=y_pixels
         )
 
-        # ----------------------------------------------------
-        # NOT ENOUGH PIXELS
-        # ----------------------------------------------------
-
-        if n_pixels < self.cfg.min_pixels_total:
+        if (
+            n_pixels
+            < self.cfg.min_pixels_total
+        ):
             return result
-
-        # ----------------------------------------------------
-        # POLYNOMIAL FIT
-        # ----------------------------------------------------
 
         coeffs, rms = self._fit_poly(
             x_pixels,
@@ -634,16 +620,11 @@ class LaneFitter:
         if coeffs is None:
             return result
 
-        # ----------------------------------------------------
-        # RMS CHECK
-        # ----------------------------------------------------
-
-        if rms > self.cfg.max_fit_rms_px:
+        if (
+            rms
+            > self.cfg.max_fit_rms_px
+        ):
             return result
-
-        # ----------------------------------------------------
-        # CURVE DIRECTION CHECK
-        # ----------------------------------------------------
 
         if not self._check_curve_direction(
             coeffs,
@@ -652,14 +633,11 @@ class LaneFitter:
         ):
             return result
 
-        # ----------------------------------------------------
-        # TEMPORAL CONSISTENCY
-        # ----------------------------------------------------
-
         if (
             self.cfg.tracking_enabled
             and previous_coeffs is not None
         ):
+
             if not self._check_temporal_consistency(
                 coeffs,
                 previous_coeffs,
@@ -667,55 +645,48 @@ class LaneFitter:
             ):
                 return result
 
-        # ----------------------------------------------------
-        # IMPORTANT:
-        #
-        # Do NOT reject the polynomial using the old
-        # side-position check here.
-        #
-        # lane_validation.py is responsible for checking
-        # whether the resulting curve is geometrically
-        # valid as a lane boundary.
-        # ----------------------------------------------------
+        # Geometry is handled by
+        # lane_validation.py.
 
-        # Candidate passed all checks.
         result.coeffs = coeffs
 
         return result
 
     # ========================================================
-    # PUBLIC FIT METHOD
+    # PUBLIC FIT
     # ========================================================
 
     def fit(
         self,
-        binary: np.ndarray,
-        previous_left: Optional[np.ndarray] = None,
-        previous_right: Optional[np.ndarray] = None
-    ) -> Tuple[LaneFitResult, LaneFitResult]:
+        binary,
+        previous_left=None,
+        previous_right=None
+    ):
 
         if binary is None:
+
             return (
                 LaneFitResult(),
                 LaneFitResult()
             )
 
         if binary.ndim != 2:
+
             raise ValueError(
-                "LaneFitter.fit() expects a binary 2D image."
+                "LaneFitter.fit() expects "
+                "a binary 2D image."
             )
 
-        # Ensure uint8 binary image.
         binary = (
             binary > 0
         ).astype(np.uint8) * 255
 
-        # Find histogram bases.
         left_base, right_base, _ = (
-            self._histogram_base(binary)
+            self._histogram_base(
+                binary
+            )
         )
 
-        # Fit left lane.
         left_result = self._fit_side(
             binary,
             left_base,
@@ -723,7 +694,6 @@ class LaneFitter:
             previous_left
         )
 
-        # Fit right lane.
         right_result = self._fit_side(
             binary,
             right_base,
@@ -737,39 +707,39 @@ class LaneFitter:
         )
 
     # ========================================================
-    # DEBUG RENDER
+    # DEBUG
     # ========================================================
 
     def debug_render(
         self,
-        binary: np.ndarray,
-        left: LaneFitResult,
-        right: LaneFitResult
-    ) -> np.ndarray:
+        binary,
+        left,
+        right
+    ):
 
         h, w = binary.shape[:2]
 
-        # Convert binary image to BGR.
         if binary.ndim == 2:
+
             canvas = cv2.cvtColor(
                 binary,
                 cv2.COLOR_GRAY2BGR
             )
-        else:
-            canvas = binary.copy()
 
-        # ----------------------------------------------------
-        # DRAW COLLECTED PIXELS
-        # ----------------------------------------------------
+        else:
+
+            canvas = binary.copy()
 
         if (
             left.x_pixels is not None
             and left.y_pixels is not None
         ):
+
             for x, y in zip(
                 left.x_pixels,
                 left.y_pixels
             ):
+
                 cv2.circle(
                     canvas,
                     (int(x), int(y)),
@@ -782,10 +752,12 @@ class LaneFitter:
             right.x_pixels is not None
             and right.y_pixels is not None
         ):
+
             for x, y in zip(
                 right.x_pixels,
                 right.y_pixels
             ):
+
                 cv2.circle(
                     canvas,
                     (int(x), int(y)),
@@ -793,10 +765,6 @@ class LaneFitter:
                     (255, 255, 255),
                     -1
                 )
-
-        # ----------------------------------------------------
-        # DRAW POLYNOMIALS
-        # ----------------------------------------------------
 
         y_values = np.linspace(
             int(h * 0.55),
@@ -815,15 +783,14 @@ class LaneFitter:
                 (x_values, y_values)
             ).astype(np.int32)
 
-            for i in range(len(points) - 1):
-
-                p1 = tuple(points[i])
-                p2 = tuple(points[i + 1])
+            for i in range(
+                len(points) - 1
+            ):
 
                 cv2.line(
                     canvas,
-                    p1,
-                    p2,
+                    tuple(points[i]),
+                    tuple(points[i + 1]),
                     (0, 255, 0),
                     3
                 )
@@ -839,15 +806,14 @@ class LaneFitter:
                 (x_values, y_values)
             ).astype(np.int32)
 
-            for i in range(len(points) - 1):
-
-                p1 = tuple(points[i])
-                p2 = tuple(points[i + 1])
+            for i in range(
+                len(points) - 1
+            ):
 
                 cv2.line(
                     canvas,
-                    p1,
-                    p2,
+                    tuple(points[i]),
+                    tuple(points[i + 1]),
                     (0, 0, 255),
                     3
                 )

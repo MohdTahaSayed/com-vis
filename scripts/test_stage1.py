@@ -315,15 +315,18 @@ def main():
     # --------------------------------------------------------
     # Stage 1D: Sliding-window polynomial fitting
     #
-    # IMPORTANT:
-    # Current LaneFitter API is:
-    #
-    #     fitter.fit(edges_roi)
-    #
-    # Do NOT pass frame=, image=, base_left=, etc.
+    # The fitter accepts optional previous-frame polynomials
+    # for temporal tracking. For a single-frame test there is
+    # no previous frame, so we pass None explicitly. This
+    # keeps the API call signature visible and matches the
+    # call pattern used by the sequential test.
     # --------------------------------------------------------
 
-    left, right = fitter.fit(edges_roi)
+    left, right = fitter.fit(
+        edges_roi,
+        previous_left=None,
+        previous_right=None
+    )
 
     # --------------------------------------------------------
     # Stage 1E: Validation

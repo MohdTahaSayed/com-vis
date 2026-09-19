@@ -47,7 +47,7 @@ from src.lane_edges import (
 from src.lane_fit import (
     LaneFitter,
     SlidingWindowConfig,
-    FitResult
+    LaneFitResult
 )
 
 from src.io_video import VideoReader
@@ -738,28 +738,30 @@ def make_frame_debug(
     # 8. FIT RESULT OBJECTS
     # --------------------------------------------------------
 
-    left = FitResult(
-        side="left",
+    left = LaneFitResult(
         coeffs=left_coeffs,
-        pixels=left_pixels,
         confidence=min(
             1.0,
             len(left_pixels) / 100.0
         ),
         n_pixels=len(left_pixels),
-        x_base=x_left
+        rms_error=left_rms,
+        x_base=x_left,
+        x_pixels=left_pixels[0] if isinstance(left_pixels, tuple) else left_pixels,
+        y_pixels=left_pixels[1] if isinstance(left_pixels, tuple) else None
     )
 
-    right = FitResult(
-        side="right",
+    right = LaneFitResult(
         coeffs=right_coeffs,
-        pixels=right_pixels,
         confidence=min(
             1.0,
             len(right_pixels) / 100.0
         ),
         n_pixels=len(right_pixels),
-        x_base=x_right
+        rms_error=right_rms,
+        x_base=x_right,
+        x_pixels=right_pixels[0] if isinstance(right_pixels, tuple) else right_pixels,
+        y_pixels=right_pixels[1] if isinstance(right_pixels, tuple) else None
     )
 
     # ========================================================
