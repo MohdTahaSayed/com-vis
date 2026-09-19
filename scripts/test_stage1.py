@@ -327,11 +327,25 @@ def main():
 
     # --------------------------------------------------------
     # Stage 1E: Validation
+    #
+    # Validate lane only below the detected horizon.
+    # A small margin prevents evaluating the curves
+    # exactly at the vanishing point.
     # --------------------------------------------------------
 
+    if horizon_y is not None:
+        y_min = max(
+            int(h * 0.62),
+            int(horizon_y + 10)
+        )
+    else:
+        y_min = int(h * 0.62)
+
+    y_max = int(h * 0.95)
+
     y_range = (
-        int(h * 0.55),
-        int(h * 0.95),
+        y_min,
+        y_max
     )
 
     validation = validator.validate(
@@ -355,6 +369,10 @@ def main():
     print(f"Timestamp   : {timestamp:.2f} s")
     print(f"Resolution  : {w} x {h}")
     print(f"Horizon     : {horizon_y}")
+    print(
+        f"Validate y  : "
+        f"{y_range[0]} -> {y_range[1]}"
+    )
 
     print()
     print("CANNY / ROI")

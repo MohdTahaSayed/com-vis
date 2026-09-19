@@ -73,6 +73,15 @@ class SlidingWindowConfig:
     left_base_shift_px: int = 0
     right_base_shift_px: int = 0
 
+    # --------------------------------------------------------
+    # TEMPORAL TRACKING
+    # --------------------------------------------------------
+    # When enabled, the sliding windows are positioned from
+    # the previous frame's polynomial instead of from the
+    # current frame's histogram. This stabilizes tracking.
+    tracking_enabled: bool = True
+    tracking_margin_px: int = 70
+
     @classmethod
     def from_dict(cls, d):
         return cls(
@@ -110,6 +119,12 @@ class SlidingWindowConfig:
             ),
             right_base_shift_px=int(
                 d.get("right_base_shift_px", 0)
+            ),
+            tracking_enabled=bool(
+                d.get("tracking_enabled", True)
+            ),
+            tracking_margin_px=int(
+                d.get("tracking_margin_px", 70)
             ),
         )
 
@@ -242,12 +257,12 @@ class LaneFitter:
         self,
         binary: np.ndarray,
         x_base: int,
-        side: str
+        side: str,
+        previous_coeffs: Optional[np.ndarray] = None
     ) -> Tuple[np.ndarray, np.ndarray]:
 
         h, w = binary.shape[:2]
 
-        # Get coordinates of all non-zero pixels.
         nonzero_y, nonzero_x = np.nonzero(binary > 0)
 
         if len(nonzero_x) == 0:
@@ -268,14 +283,10 @@ class LaneFitter:
             int(w * self.cfg.window_width_frac)
         )
 
-        current_x = int(x_base)
-
         collected_x = []
         collected_y = []
 
-        # ----------------------------------------------------
-        # PROCESS FROM BOTTOM TO TOP
-        # ----------------------------------------------------
+        current_x = int(x_base)
 
         for window in range(n_windows):
 
@@ -285,37 +296,128 @@ class LaneFitter:
                 h - (window + 1) * window_height
             )
 
-            # Window boundaries.
-            x_low = current_x - window_width // 2
-            x_high = current_x + window_width // 2
+            # ====================================================
+            # DETERMINE EXPECTED LANE POSITION
+            # ====================================================
 
-            x_low = max(0, x_low)
-            x_high = min(w, x_high)
+            if (
+                self.cfg.tracking_enabled
+                and previous_coeffs is not None
+            ):
 
-            # Pixels inside current window.
-            good = (
-                (nonzero_y >= y_low)
-                & (nonzero_y < y_high)
-                & (nonzero_x >= x_low)
-                & (nonzero_x < x_high)
+                # Instead of treating the whole 70 px region as
+                # lane pixels, predict the lane centre.
+                y_center = (
+                    y_low + y_high
+                ) / 2.0
+
+                predicted_x = float(
+                    np.polyval(
+                        previous_coeffs,
+                        y_center
+                    )
+                )
+
+                predicted_x = float(
+                    np.clip(
+                        predicted_x,
+                        0,
+                        w - 1
+                    )
+                )
+
+                current_x = int(
+                    round(predicted_x)
+                )
+
+                # Keep the existing tracking margin.
+                search_half_width = (
+                    self.cfg.tracking_margin_px
+                )
+
+            else:
+
+                search_half_width = (
+                    window_width // 2
+                )
+
+            # ====================================================
+            # SEARCH REGION
+            # ====================================================
+
+            search_x_low = max(
+                0,
+                current_x - search_half_width
             )
 
-            good_x = nonzero_x[good]
-            good_y = nonzero_y[good]
+            search_x_high = min(
+                w,
+                current_x + search_half_width
+            )
 
-            if len(good_x) > 0:
-                collected_x.append(good_x)
-                collected_y.append(good_y)
+            region = (
+                (nonzero_y >= y_low)
+                & (nonzero_y < y_high)
+                & (nonzero_x >= search_x_low)
+                & (nonzero_x < search_x_high)
+            )
 
-            # ------------------------------------------------
+            candidate_x = nonzero_x[region]
+            candidate_y = nonzero_y[region]
+
+            if len(candidate_x) == 0:
+                continue
+
+            # ====================================================
+            # TEMPORAL MODE:
+            # KEEP ONLY PIXELS CLOSEST TO PREDICTION
+            # ====================================================
+
+            if (
+                self.cfg.tracking_enabled
+                and previous_coeffs is not None
+            ):
+
+                predicted_for_pixels = np.polyval(
+                    previous_coeffs,
+                    candidate_y
+                )
+
+                distance = np.abs(
+                    candidate_x - predicted_for_pixels
+                )
+
+                # Use the existing window width as the lane
+                # neighbourhood. This prevents unrelated edges
+                # inside the 70 px search region from contaminating
+                # the polynomial.
+                pixel_limit = window_width / 2.0
+
+                keep = distance <= pixel_limit
+
+                candidate_x = candidate_x[keep]
+                candidate_y = candidate_y[keep]
+
+            # ====================================================
+            # COLLECT
+            # ====================================================
+
+            if len(candidate_x) == 0:
+                continue
+
+            collected_x.append(candidate_x)
+            collected_y.append(candidate_y)
+
+            # ====================================================
             # RECENTER
-            # ------------------------------------------------
+            # ====================================================
 
-            if len(good_x) >= self.cfg.min_pixels_to_recenter:
+            if len(candidate_x) >= self.cfg.min_pixels_to_recenter:
 
-                new_x = int(np.mean(good_x))
+                new_x = int(
+                    np.median(candidate_x)
+                )
 
-                # Prevent very large jumps.
                 max_jump = int(
                     w * self.cfg.max_recenter_jump_frac
                 )
@@ -323,9 +425,9 @@ class LaneFitter:
                 if abs(new_x - current_x) <= max_jump:
                     current_x = new_x
 
-        # ----------------------------------------------------
+        # ========================================================
         # COMBINE
-        # ----------------------------------------------------
+        # ========================================================
 
         if len(collected_x) == 0:
             return (
@@ -333,8 +435,13 @@ class LaneFitter:
                 np.array([], dtype=np.int32)
             )
 
-        x_pixels = np.concatenate(collected_x)
-        y_pixels = np.concatenate(collected_y)
+        x_pixels = np.concatenate(
+            collected_x
+        )
+
+        y_pixels = np.concatenate(
+            collected_y
+        )
 
         return x_pixels, y_pixels
 
@@ -417,6 +524,57 @@ class LaneFitter:
         return True
 
     # ========================================================
+    # TEMPORAL CONSISTENCY
+    # ========================================================
+
+    def _check_temporal_consistency(
+        self,
+        candidate_coeffs: np.ndarray,
+        previous_coeffs: Optional[np.ndarray],
+        height: int
+    ) -> bool:
+        """
+        Check whether the newly fitted lane is reasonably close
+        to the lane detected in the previous frame.
+
+        The existing tracking_margin_px is used as the maximum
+        allowed displacement. No new tuning parameter is introduced.
+        """
+
+        # No previous lane -> nothing to compare against.
+        if previous_coeffs is None:
+            return True
+
+        # Evaluate both curves over the useful lane region.
+        y_values = np.linspace(
+            int(height * 0.62),
+            int(height * 0.95),
+            30
+        )
+
+        previous_x = np.polyval(
+            previous_coeffs,
+            y_values
+        )
+
+        candidate_x = np.polyval(
+            candidate_coeffs,
+            y_values
+        )
+
+        # Difference between previous and current lane.
+        displacement = np.abs(
+            candidate_x - previous_x
+        )
+
+        max_displacement = float(
+            np.max(displacement)
+        )
+
+        # Use the EXISTING tracking margin.
+        return max_displacement <= self.cfg.tracking_margin_px
+
+    # ========================================================
     # SIDE FIT
     # ========================================================
 
@@ -424,7 +582,8 @@ class LaneFitter:
         self,
         binary: np.ndarray,
         x_base: int,
-        side: str
+        side: str,
+        previous_coeffs: Optional[np.ndarray] = None
     ) -> LaneFitResult:
 
         h, w = binary.shape[:2]
@@ -432,7 +591,8 @@ class LaneFitter:
         x_pixels, y_pixels = self._collect_side_pixels(
             binary,
             x_base,
-            side
+            side,
+            previous_coeffs
         )
 
         n_pixels = len(x_pixels)
@@ -493,6 +653,21 @@ class LaneFitter:
             return result
 
         # ----------------------------------------------------
+        # TEMPORAL CONSISTENCY
+        # ----------------------------------------------------
+
+        if (
+            self.cfg.tracking_enabled
+            and previous_coeffs is not None
+        ):
+            if not self._check_temporal_consistency(
+                coeffs,
+                previous_coeffs,
+                h
+            ):
+                return result
+
+        # ----------------------------------------------------
         # IMPORTANT:
         #
         # Do NOT reject the polynomial using the old
@@ -503,6 +678,7 @@ class LaneFitter:
         # valid as a lane boundary.
         # ----------------------------------------------------
 
+        # Candidate passed all checks.
         result.coeffs = coeffs
 
         return result
@@ -513,7 +689,9 @@ class LaneFitter:
 
     def fit(
         self,
-        binary: np.ndarray
+        binary: np.ndarray,
+        previous_left: Optional[np.ndarray] = None,
+        previous_right: Optional[np.ndarray] = None
     ) -> Tuple[LaneFitResult, LaneFitResult]:
 
         if binary is None:
@@ -541,14 +719,16 @@ class LaneFitter:
         left_result = self._fit_side(
             binary,
             left_base,
-            "left"
+            "left",
+            previous_left
         )
 
         # Fit right lane.
         right_result = self._fit_side(
             binary,
             right_base,
-            "right"
+            "right",
+            previous_right
         )
 
         return (

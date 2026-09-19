@@ -124,7 +124,7 @@ roi:
 sliding_window:
   n_windows: 20
   window_width_frac: 0.15
-  min_pixels_to_recenter: 12
+  min_pixels_to_recenter: 15
   min_pixels_total: 100
   min_pixels_per_window: 6
   max_fit_rms_px: 25.0
@@ -133,11 +133,14 @@ sliding_window:
   left_max_x_frac: 0.58
   right_min_x_frac: 0.42
 
-  max_recenter_jump_frac: 0.10
+  max_recenter_jump_frac: 0.04
   check_curve_direction: true
 
   left_base_shift_px: 0
-  right_base_shift_px: -100
+  right_base_shift_px: 0
+
+  tracking_enabled: true
+  tracking_margin_px: 70
 
 # =====================================================================
 # Lane validation

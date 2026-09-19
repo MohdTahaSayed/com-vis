@@ -301,6 +301,17 @@ def main():
     }
 
     # ---------------------------------------------------------
+    # Temporal tracking state
+    #
+    # Only updated when the corresponding lane passed
+    # validation, so a bad frame cannot poison the
+    # sliding-window tracker on the next frame.
+    # ---------------------------------------------------------
+
+    previous_left = None
+    previous_right = None
+
+    # ---------------------------------------------------------
     # Processing
     # ---------------------------------------------------------
 
@@ -341,22 +352,42 @@ def main():
 
         # -----------------------------------------------------
         # 4. Sliding-window lane fitting
+        #
+        # previous_left / previous_right come from the last
+        # frame whose corresponding lane passed validation.
+        # On the first frame (or after a rejected frame) they
+        # are None, and the fitter falls back to the histogram
+        # base + narrow windows.
         # -----------------------------------------------------
 
         left, right = fitter.fit(
-            edges_roi
+            edges_roi,
+            previous_left=previous_left,
+            previous_right=previous_right
         )
 
         # -----------------------------------------------------
         # 5. Lane validation
+        #
+        # Validation range is anchored to the detected
+        # horizon: the upper bound is the max of 0.62*h and
+        # horizon_y + 10, so we never evaluate the polynomial
+        # above the usable road area. Falls back to 0.62*h
+        # if horizon detection failed.
         # -----------------------------------------------------
 
         h, w = frame.shape[:2]
 
-        y_range = (
-            int(h * 0.55),
-            int(h * 0.95)
-        )
+        if horizon_y is not None:
+            y_range = (
+                max(int(h * 0.62), horizon_y + 10),
+                int(h * 0.95)
+            )
+        else:
+            y_range = (
+                int(h * 0.62),
+                int(h * 0.95)
+            )
 
         validation = validator.validate(
             left.coeffs,
@@ -364,6 +395,50 @@ def main():
             y_range,
             w
         )
+
+        # -----------------------------------------------------
+        # GEOMETRY DEBUG
+        # -----------------------------------------------------
+        # Print the sampled left/right lane x positions and
+        # the resulting lane width at five y values inside the
+        # validated region. Used to diagnose drift where the
+        # pair check fails even though L and R individually
+        # pass.
+        #
+        # debug_ys is a linear interpolation between
+        # y_range[0] and y_range[1], so all five samples lie
+        # strictly inside the validated band.
+        # -----------------------------------------------------
+
+        if left.coeffs is not None and right.coeffs is not None:
+
+            debug_ys = np.array([
+                y_range[0],
+                int(y_range[0] + (y_range[1] - y_range[0]) * 0.25),
+                int(y_range[0] + (y_range[1] - y_range[0]) * 0.50),
+                int(y_range[0] + (y_range[1] - y_range[0]) * 0.75),
+                y_range[1]
+            ])
+
+            left_x = np.polyval(
+                left.coeffs,
+                debug_ys
+            )
+
+            right_x = np.polyval(
+                right.coeffs,
+                debug_ys
+            )
+
+            widths = right_x - left_x
+
+            print(
+                "    geometry:"
+                f" y={debug_ys.tolist()}"
+                f" L={np.round(left_x, 1).tolist()}"
+                f" R={np.round(right_x, 1).tolist()}"
+                f" W={np.round(widths, 1).tolist()}"
+            )
 
         if validation.left_ok:
             validation_counts["left_valid"] += 1
@@ -373,6 +448,26 @@ def main():
 
         if validation.pair_ok:
             validation_counts["pair_valid"] += 1
+
+        # -----------------------------------------------------
+        # UPDATE TEMPORAL TRACKING STATE
+        # -----------------------------------------------------
+        # Only use a polynomial from a frame that passed
+        # validation. This prevents a bad detection from
+        # poisoning the next frame.
+        # -----------------------------------------------------
+
+        if (
+            validation.left_ok
+            and left.coeffs is not None
+        ):
+            previous_left = left.coeffs.copy()
+
+        if (
+            validation.right_ok
+            and right.coeffs is not None
+        ):
+            previous_right = right.coeffs.copy()
 
         # -----------------------------------------------------
         # 6. Temporal LaneState
@@ -424,7 +519,9 @@ def main():
             f"Lpx={left.n_pixels:4d} "
             f"Rpx={right.n_pixels:4d}  "
             f"Lconf={l_conf:.2f} "
-            f"Rconf={r_conf:.2f}"
+            f"Rconf={r_conf:.2f}  "
+            f"PAIR={validation.pair_ok} "
+            f"REASON={validation.reason_pair}"
         )
 
         # -----------------------------------------------------
@@ -433,7 +530,7 @@ def main():
 
         vis = frame.copy()
 
-        # Draw raw/current detected lanes through LaneState output
+        # Draw LaneState output (OK or HOLD)
         draw_lane(
             vis,
             l_coeffs,
@@ -484,7 +581,7 @@ def main():
 
             put_text(
                 vis,
-                f"Horizon y={horizon_y}",
+                f"Horizon y={horizon_y}  val_start={y_range[0]}",
                 120
             )
 
