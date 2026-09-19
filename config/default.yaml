@@ -19,8 +19,8 @@ horizon:
   variance_threshold: 30.0
   run_length: 5
   smoothing_alpha: 0.25
-  min_y_frac: 0.63
-  max_y_frac: 0.63
+  min_y_frac: 0.62
+  max_y_frac: 0.62
 # =====================================================================
 # Lane color detection
 # =====================================================================
