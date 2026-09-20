@@ -47,18 +47,22 @@ def load_config(path):
 # ============================================================
 
 def get_frame(args):
+
     vr = VideoReader(args.input)
 
     fps = vr.info.fps
 
     if args.time is not None:
         idx = int(round(args.time * fps))
+
     elif args.frame is not None:
         idx = args.frame
+
     else:
         idx = 0
 
     frame = vr.read_frame(idx)
+
     vr.release()
 
     if frame is None:
@@ -81,6 +85,7 @@ def label(
     position=(8, 24),
     color=(0, 255, 255),
 ):
+
     cv2.putText(
         img,
         text,
@@ -117,12 +122,17 @@ def draw_polynomial(
     color,
     thickness=3,
 ):
+
     if coeffs is None:
         return frame
 
     y1, y2 = y_range
 
-    ys = np.linspace(y1, y2, 100)
+    ys = np.linspace(
+        y1,
+        y2,
+        100,
+    )
 
     a, b, c = coeffs
 
@@ -149,6 +159,7 @@ def draw_polynomial(
     pts = pts[valid]
 
     if len(pts) >= 2:
+
         cv2.polylines(
             frame,
             [pts],
@@ -217,7 +228,9 @@ def main():
     # Load configuration
     # --------------------------------------------------------
 
-    cfg = load_config(args.config)
+    cfg = load_config(
+        args.config
+    )
 
     # --------------------------------------------------------
     # Initialize modules
@@ -225,25 +238,37 @@ def main():
 
     horizon = HorizonDetector(
         HorizonConfig.from_dict(
-            cfg.get("horizon", {})
+            cfg.get(
+                "horizon",
+                {}
+            )
         )
     )
 
     roi = LaneROI(
         RoiConfig.from_dict(
-            cfg.get("roi", {})
+            cfg.get(
+                "roi",
+                {}
+            )
         )
     )
 
     lane_color = LaneColor(
         LaneColorConfig.from_dict(
-            cfg.get("lane_color", {})
+            cfg.get(
+                "lane_color",
+                {}
+            )
         )
     )
 
     edges_module = LaneEdges(
         CannyConfig.from_dict(
-            cfg.get("canny", {})
+            cfg.get(
+                "canny",
+                {}
+            )
         ),
         roi,
         lane_color,
@@ -252,19 +277,28 @@ def main():
 
     hough = LaneHough(
         HoughConfig.from_dict(
-            cfg.get("hough", {})
+            cfg.get(
+                "hough",
+                {}
+            )
         )
     )
 
     fitter = LaneFitter(
         SlidingWindowConfig.from_dict(
-            cfg.get("sliding_window", {})
+            cfg.get(
+                "sliding_window",
+                {}
+            )
         )
     )
 
     validator = LaneValidation(
         ValidationConfig.from_dict(
-            cfg.get("validation", {})
+            cfg.get(
+                "validation",
+                {}
+            )
         )
     )
 
@@ -272,7 +306,9 @@ def main():
     # Read selected frame
     # --------------------------------------------------------
 
-    frame, frame_idx, timestamp = get_frame(args)
+    frame, frame_idx, timestamp = get_frame(
+        args
+    )
 
     h, w = frame.shape[:2]
 
@@ -280,15 +316,19 @@ def main():
     # Stage 1A: Horizon detection
     # --------------------------------------------------------
 
-    horizon_y = horizon.detect(frame)
+    horizon_y = horizon.detect(
+        frame
+    )
 
     # --------------------------------------------------------
     # Stage 1B: Canny + ROI + HSV reinforcement
     # --------------------------------------------------------
 
-    edges_roi, edges_raw, hsv_hits = edges_module.compute(
-        frame,
-        top_y_override=horizon_y,
+    edges_roi, edges_raw, hsv_hits = (
+        edges_module.compute(
+            frame,
+            top_y_override=horizon_y,
+        )
     )
 
     # --------------------------------------------------------
@@ -296,46 +336,48 @@ def main():
     # --------------------------------------------------------
 
     left_segments, right_segments, discard_segments = (
-        hough.classify(edges_roi)
+        hough.classify(
+            edges_roi
+        )
     )
 
     # --------------------------------------------------------
     # Stage 1D: Sliding-window polynomial fitting
     #
-    # The fitter accepts optional previous-frame polynomials
-    # for temporal tracking. For a single-frame test there is
-    # no previous frame, so we pass None explicitly. This
-    # keeps the API call signature visible and matches the
-    # call pattern used by the sequential test.
+    # The fitter accepts optional previous-frame polynomials.
+    # For a single-frame test there is no previous frame.
     # --------------------------------------------------------
 
     left, right = fitter.fit(
         edges_roi,
         previous_left=None,
-        previous_right=None
+        previous_right=None,
     )
 
     # --------------------------------------------------------
     # Stage 1E: Validation
     #
     # Validate lane only below the detected horizon.
-    # A small margin prevents evaluating the curves
-    # exactly at the vanishing point.
     # --------------------------------------------------------
 
     if horizon_y is not None:
+
         y_min = max(
             int(h * 0.62),
-            int(horizon_y + 10)
+            int(horizon_y + 10),
         )
+
     else:
+
         y_min = int(h * 0.62)
 
-    y_max = int(h * 0.95)
+    y_max = int(
+        h * 0.95
+    )
 
     y_range = (
         y_min,
-        y_max
+        y_max,
     )
 
     validation = validator.validate(
@@ -354,11 +396,26 @@ def main():
     print("STAGE 1 LANE DETECTION TEST")
     print("=" * 70)
 
-    print(f"Input       : {args.input}")
-    print(f"Frame       : {frame_idx}")
-    print(f"Timestamp   : {timestamp:.2f} s")
-    print(f"Resolution  : {w} x {h}")
-    print(f"Horizon     : {horizon_y}")
+    print(
+        f"Input       : {args.input}"
+    )
+
+    print(
+        f"Frame       : {frame_idx}"
+    )
+
+    print(
+        f"Timestamp   : {timestamp:.2f} s"
+    )
+
+    print(
+        f"Resolution  : {w} x {h}"
+    )
+
+    print(
+        f"Horizon     : {horizon_y}"
+    )
+
     print(
         f"Validate y  : "
         f"{y_range[0]} -> {y_range[1]}"
@@ -379,6 +436,7 @@ def main():
     )
 
     if hsv_hits is not None:
+
         print(
             f"HSV hits        : "
             f"{int((hsv_hits > 0).sum())} px"
@@ -388,9 +446,20 @@ def main():
     print("HOUGH")
     print("-" * 70)
 
-    print(f"Left segments   : {len(left_segments)}")
-    print(f"Right segments  : {len(right_segments)}")
-    print(f"Discarded       : {len(discard_segments)}")
+    print(
+        f"Left segments   : "
+        f"{len(left_segments)}"
+    )
+
+    print(
+        f"Right segments  : "
+        f"{len(right_segments)}"
+    )
+
+    print(
+        f"Discarded       : "
+        f"{len(discard_segments)}"
+    )
 
     print()
     print("POLYNOMIAL FIT")
@@ -411,12 +480,14 @@ def main():
     )
 
     if left.coeffs is not None:
+
         print(
             f"LEFT coeffs  : "
             f"{left.coeffs}"
         )
 
     if right.coeffs is not None:
+
         print(
             f"RIGHT coeffs : "
             f"{right.coeffs}"
@@ -476,6 +547,7 @@ def main():
     )
 
     if horizon_y is not None:
+
         cv2.line(
             p1,
             (0, horizon_y),

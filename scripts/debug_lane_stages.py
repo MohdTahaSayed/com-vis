@@ -19,11 +19,6 @@ sys.path.insert(
     )
 )
 
-from src.artifact_mask import (
-    ArtifactMask,
-    ArtifactMaskConfig
-)
-
 from src.horizon import (
     HorizonDetector,
     HorizonConfig
@@ -605,15 +600,6 @@ def make_frame_debug(
     # 1. INITIALIZE MODULES
     # --------------------------------------------------------
 
-    am = ArtifactMask(
-        ArtifactMaskConfig.from_dict(
-            cfg.get(
-                "artifact_mask",
-                {}
-            )
-        )
-    )
-
     hz = HorizonDetector(
         HorizonConfig.from_dict(
             cfg.get(
@@ -663,34 +649,26 @@ def make_frame_debug(
     )
 
     # --------------------------------------------------------
-    # 2. ARTIFACT MASK
+    # 2. HORIZON
     # --------------------------------------------------------
 
-    masked = am.apply(
+    horizon_y = hz.detect(
         frame
     )
 
     # --------------------------------------------------------
-    # 3. HORIZON
-    # --------------------------------------------------------
-
-    horizon_y = hz.detect(
-        masked
-    )
-
-    # --------------------------------------------------------
-    # 4. EDGES + ROI + HSV
+    # 3. EDGES + ROI + HSV
     # --------------------------------------------------------
 
     edges_roi, edges_raw, hsv_hits = (
         edges_mod.compute(
-            masked,
+            frame,
             top_y_override=horizon_y
         )
     )
 
     # --------------------------------------------------------
-    # 5. HISTOGRAM BASES
+    # 4. HISTOGRAM BASES
     #
     # IMPORTANT:
     # LaneFitter calculates the shifted bases.
@@ -703,7 +681,7 @@ def make_frame_debug(
     )
 
     # --------------------------------------------------------
-    # 6. SLIDING WINDOWS
+    # 5. SLIDING WINDOWS
     #
     # EXACT SAME LaneFitter logic
     # --------------------------------------------------------
@@ -719,7 +697,7 @@ def make_frame_debug(
     )
 
     # --------------------------------------------------------
-    # 7. POLYNOMIAL FIT
+    # 6. POLYNOMIAL FIT
     # --------------------------------------------------------
 
     left_coeffs, left_rms = (
@@ -735,7 +713,7 @@ def make_frame_debug(
     )
 
     # --------------------------------------------------------
-    # 8. FIT RESULT OBJECTS
+    # 7. FIT RESULT OBJECTS
     # --------------------------------------------------------
 
     left = LaneFitResult(
@@ -796,87 +774,76 @@ def make_frame_debug(
         )
 
     # --------------------------------------------------------
-    # B. ARTIFACT
+    # B. CANNY RAW
     # --------------------------------------------------------
 
-    p2 = masked.copy()
-
-    label(
-        p2,
-        "Artifact Masked"
-    )
-
-    # --------------------------------------------------------
-    # C. CANNY RAW
-    # --------------------------------------------------------
-
-    p3 = cv2.cvtColor(
+    p2 = cv2.cvtColor(
         edges_raw,
         cv2.COLOR_GRAY2BGR
     )
 
     label(
-        p3,
+        p2,
         "Canny Raw"
     )
 
     # --------------------------------------------------------
-    # D. ROI EDGES
+    # C. ROI EDGES
     # --------------------------------------------------------
 
-    p4 = cv2.cvtColor(
+    p3 = cv2.cvtColor(
         edges_roi,
         cv2.COLOR_GRAY2BGR
     )
 
     label(
-        p4,
+        p3,
         "Canny + ROI + HSV"
         f" | {np.count_nonzero(edges_roi)} px"
     )
 
     # --------------------------------------------------------
-    # E. HSV
+    # D. HSV
     # --------------------------------------------------------
 
     if hsv_hits is not None:
 
-        p5 = cv2.cvtColor(
+        p4 = cv2.cvtColor(
             hsv_hits,
             cv2.COLOR_GRAY2BGR
         )
 
         label(
-            p5,
+            p4,
             "HSV Reinforcement Mask"
         )
 
     else:
 
-        p5 = np.zeros_like(
-            p4
+        p4 = np.zeros_like(
+            p3
         )
 
         label(
-            p5,
+            p4,
             "HSV Reinforcement: None"
         )
 
     # --------------------------------------------------------
-    # F. HISTOGRAM
+    # E. HISTOGRAM
     # --------------------------------------------------------
 
-    p6 = draw_histogram(
+    p5 = draw_histogram(
         edges_roi,
         x_left,
         x_right
     )
 
     # --------------------------------------------------------
-    # G. LEFT WINDOWS
+    # F. LEFT WINDOWS
     # --------------------------------------------------------
 
-    p7 = draw_sliding_windows(
+    p6 = draw_sliding_windows(
         edges_roi,
         x_left,
         "LEFT",
@@ -884,10 +851,10 @@ def make_frame_debug(
     )
 
     # --------------------------------------------------------
-    # H. RIGHT WINDOWS
+    # G. RIGHT WINDOWS
     # --------------------------------------------------------
 
-    p8 = draw_sliding_windows(
+    p7 = draw_sliding_windows(
         edges_roi,
         x_right,
         "RIGHT",
@@ -895,10 +862,10 @@ def make_frame_debug(
     )
 
     # --------------------------------------------------------
-    # I. POLYNOMIAL
+    # H. POLYNOMIAL
     # --------------------------------------------------------
 
-    p9 = draw_poly_fit(
+    p8 = draw_poly_fit(
         frame,
         left,
         right
@@ -920,8 +887,7 @@ def make_frame_debug(
         p5,
         p6,
         p7,
-        p8,
-        p9
+        p8
     ]:
 
         new_w = int(
@@ -941,7 +907,7 @@ def make_frame_debug(
         )
 
     # ========================================================
-    # 3 x 3 GRID
+    # 3 x 3 GRID (last cell empty)
     # ========================================================
 
     rows = []
@@ -952,10 +918,23 @@ def make_frame_debug(
         3
     ):
 
+        chunk = panels[
+            i:i + 3
+        ]
+
+        # Pad final row with a blank panel if needed
+        while len(chunk) < 3:
+
+            blank = np.zeros_like(
+                panels[0]
+            )
+
+            chunk.append(
+                blank
+            )
+
         row = np.hstack(
-            panels[
-                i:i + 3
-            ]
+            chunk
         )
 
         rows.append(

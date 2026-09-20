@@ -20,7 +20,6 @@ sys.path.insert(
     )
 )
 
-from src.artifact_mask import ArtifactMask, ArtifactMaskConfig
 from src.horizon import HorizonDetector, HorizonConfig
 from src.lane_color import LaneColor, LaneColorConfig
 from src.lane_roi import LaneROI, RoiConfig
@@ -209,15 +208,6 @@ def main():
     # --------------------------------------------------------
     # Lane pipeline modules
     # --------------------------------------------------------
-
-    artifact_mask = ArtifactMask(
-        ArtifactMaskConfig.from_dict(
-            cfg.get(
-                "artifact_mask",
-                {}
-            )
-        )
-    )
 
     horizon = HorizonDetector(
         HorizonConfig.from_dict(
@@ -492,46 +482,38 @@ def main():
     ):
 
         # ====================================================
-        # 1. ARTIFACT MASK
+        # 1. HORIZON
         # ====================================================
 
-        f_masked = artifact_mask.apply(
+        horizon_y = horizon.detect(
             frame
         )
 
         # ====================================================
-        # 2. HORIZON
-        # ====================================================
-
-        horizon_y = horizon.detect(
-            f_masked
-        )
-
-        # ====================================================
-        # 3. CANNY + ROI + HSV
+        # 2. CANNY + ROI + HSV
         # ====================================================
 
         edges_roi, _, _ = (
             edges_module.compute(
-                f_masked,
+                frame,
                 top_y_override=horizon_y,
             )
         )
 
         # ====================================================
-        # 4. LANE FIT
+        # 3. LANE FIT
         #
         # IMPORTANT:
-        # Pass the frame to the new fitter.
+        # Pass the original frame to the fitter.
         # ====================================================
 
         left, right = fitter.fit(
             edges_roi,
-            frame=f_masked,
+            frame=frame,
         )
 
         # ====================================================
-        # 5. VALIDATION
+        # 4. VALIDATION
         # ====================================================
 
         h, w = frame.shape[:2]
@@ -549,7 +531,7 @@ def main():
         )
 
         # ====================================================
-        # 6. TEMPORAL STATE
+        # 5. TEMPORAL STATE
         # ====================================================
 
         (
@@ -580,7 +562,7 @@ def main():
         )
 
         # ====================================================
-        # 7. EGO POSITION — 1 Hz
+        # 6. EGO POSITION — 1 Hz
         # ====================================================
 
         if idx % sample_step == 0:
@@ -708,7 +690,7 @@ def main():
             )
 
             # =================================================
-            # 8. LANE CHANGE DETECTION
+            # 7. LANE CHANGE DETECTION
             # =================================================
 
             event = lane_change_detector.feed(
@@ -735,7 +717,7 @@ def main():
                 )
 
         # ====================================================
-        # 9. SIGN DETECTION
+        # 8. SIGN DETECTION
         # ====================================================
 
         if (
@@ -760,7 +742,7 @@ def main():
             )
 
         # ====================================================
-        # 10. DEBUG VIDEO
+        # 9. DEBUG VIDEO
         # ====================================================
 
         if writer is not None:
@@ -971,7 +953,7 @@ def main():
     print()
 
     print(
-        f"Ego samples:"
+        "Ego samples:"
     )
 
     print(

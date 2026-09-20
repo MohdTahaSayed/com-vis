@@ -18,11 +18,6 @@ sys.path.insert(
     )
 )
 
-from src.artifact_mask import (
-    ArtifactMask,
-    ArtifactMaskConfig
-)
-
 from src.horizon import (
     HorizonDetector,
     HorizonConfig
@@ -334,23 +329,6 @@ def main():
     )
 
     # --------------------------------------------------------
-    # ARTIFACT
-    # --------------------------------------------------------
-
-    artifact = ArtifactMask(
-        ArtifactMaskConfig.from_dict(
-            cfg.get(
-                "artifact_mask",
-                {}
-            )
-        )
-    )
-
-    processed = artifact.apply(
-        frame
-    )
-
-    # --------------------------------------------------------
     # HORIZON
     # --------------------------------------------------------
 
@@ -364,7 +342,7 @@ def main():
     )
 
     horizon_y = horizon_detector.detect(
-        processed
+        frame
     )
 
     # --------------------------------------------------------
@@ -410,7 +388,7 @@ def main():
     )
 
     edges_roi, _, _ = edges.compute(
-        processed,
+        frame,
         top_y_override=horizon_y
     )
 

@@ -286,3 +286,70 @@ class LaneHough:
             discarded
 
         )
+
+
+    # ========================================================
+    # DEBUG RENDER
+    # ========================================================
+
+    def debug_render(
+        self,
+        frame: np.ndarray,
+        left_segments,
+        right_segments,
+        discard_segments,
+    ) -> np.ndarray:
+        """
+        Draw classified Hough segments on a copy of frame.
+
+        Colors:
+            left    -> yellow (0, 255, 255)
+            right   -> green  (0, 255, 0)
+            discard -> red    (0, 0, 255)
+        """
+
+        out = frame.copy()
+
+        # ----------------------------------------------------
+        # LEFT lane segments
+        # ----------------------------------------------------
+
+        for seg in left_segments:
+
+            cv2.line(
+                out,
+                (seg.x1, seg.y1),
+                (seg.x2, seg.y2),
+                (0, 255, 255),
+                2,
+            )
+
+        # ----------------------------------------------------
+        # RIGHT lane segments
+        # ----------------------------------------------------
+
+        for seg in right_segments:
+
+            cv2.line(
+                out,
+                (seg.x1, seg.y1),
+                (seg.x2, seg.y2),
+                (0, 255, 0),
+                2,
+            )
+
+        # ----------------------------------------------------
+        # Discarded segments
+        # ----------------------------------------------------
+
+        for seg in discard_segments:
+
+            cv2.line(
+                out,
+                (seg.x1, seg.y1),
+                (seg.x2, seg.y2),
+                (0, 0, 255),
+                1,
+            )
+
+        return out

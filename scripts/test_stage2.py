@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -11,7 +10,6 @@ import yaml
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.artifact_mask import ArtifactMask, ArtifactMaskConfig
 from src.horizon import HorizonDetector, HorizonConfig
 from src.lane_color import LaneColor, LaneColorConfig
 from src.lane_roi import LaneROI, RoiConfig
@@ -41,7 +39,6 @@ def main():
     os.makedirs(args.outdir, exist_ok=True)
     cfg = load_yaml(args.config)
 
-    am = ArtifactMask(ArtifactMaskConfig.from_dict(cfg.get("artifact_mask", {})))
     hz = HorizonDetector(HorizonConfig.from_dict(cfg.get("horizon", {})))
     roi = LaneROI(RoiConfig.from_dict(cfg.get("roi", {})))
     lc = LaneColor(LaneColorConfig.from_dict(cfg.get("lane_color", {})))
@@ -65,9 +62,8 @@ def main():
     n_processed = 0
     n_rows = 0
     for idx, ts, frame in vr.iter_frames(step=1):
-        f_masked = am.apply(frame)
-        horizon_y = hz.detect(f_masked)
-        edges_roi, _, _ = edges_mod.compute(f_masked, top_y_override=horizon_y)
+        horizon_y = hz.detect(frame)
+        edges_roi, _, _ = edges_mod.compute(frame, top_y_override=horizon_y)
 
         left, right = fitter.fit(edges_roi)
         h, w = frame.shape[:2]

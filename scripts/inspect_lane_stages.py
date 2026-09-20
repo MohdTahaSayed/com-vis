@@ -4,14 +4,13 @@ Lane Analytics - Visualize individual lane-detection stages.
 Stages shown:
 
 1. Original frame
-2. Artifact mask
-3. Horizon detection
-4. Raw Canny edges
-5. ROI applied to Canny
-6. HSV white/yellow mask
-7. Final reinforced edges
-8. Hough line classification
-9. Polynomial lane fit
+2. Horizon detection
+3. Raw Canny edges
+4. ROI applied to Canny
+5. HSV white/yellow mask
+6. Final reinforced edges
+7. Hough line classification
+8. Polynomial lane fit
 
 Usage:
 
@@ -22,7 +21,6 @@ Usage:
 Outputs:
 
     outputs/lane_inspection_original.png
-    outputs/lane_inspection_artifact.png
     outputs/lane_inspection_horizon.png
     outputs/lane_inspection_canny_raw.png
     outputs/lane_inspection_roi.png
@@ -62,11 +60,6 @@ sys.path.insert(
 # =====================================================================
 # Project modules
 # =====================================================================
-
-from src.artifact_mask import (
-    ArtifactMask,
-    ArtifactMaskConfig,
-)
 
 from src.horizon import (
     HorizonDetector,
@@ -302,57 +295,6 @@ def draw_hough(
         )
 
     return out
-    out = frame.copy()
-
-    # ---------------------------------------------------------------
-    # Left lane segments
-    # ---------------------------------------------------------------
-
-    for seg in left_segments:
-
-        x1, y1, x2, y2 = seg
-
-        cv2.line(
-            out,
-            (x1, y1),
-            (x2, y2),
-            (0, 255, 255),
-            2,
-        )
-
-    # ---------------------------------------------------------------
-    # Right lane segments
-    # ---------------------------------------------------------------
-
-    for seg in right_segments:
-
-        x1, y1, x2, y2 = seg
-
-        cv2.line(
-            out,
-            (x1, y1),
-            (x2, y2),
-            (0, 255, 0),
-            2,
-        )
-
-    # ---------------------------------------------------------------
-    # Discarded segments
-    # ---------------------------------------------------------------
-
-    for seg in discard_segments:
-
-        x1, y1, x2, y2 = seg
-
-        cv2.line(
-            out,
-            (x1, y1),
-            (x2, y2),
-            (0, 0, 255),
-            1,
-        )
-
-    return out
 
 
 # =====================================================================
@@ -421,15 +363,6 @@ def main():
     # ---------------------------------------------------------------
     # Build project modules
     # ---------------------------------------------------------------
-
-    artifact = ArtifactMask(
-        ArtifactMaskConfig.from_dict(
-            cfg.get(
-                "artifact_mask",
-                {}
-            )
-        )
-    )
 
     horizon = HorizonDetector(
         HorizonConfig.from_dict(
@@ -554,34 +487,15 @@ def main():
     )
 
     # =================================================================
-    # STAGE 0 - ARTIFACT MASK
-    # =================================================================
-
-    masked = artifact.apply(
-        frame
-    )
-
-    artifact_display = artifact.debug_render(
-        frame.copy(),
-        fill=True
-    )
-
-    artifact_display = label(
-        artifact_display,
-        "ARTIFACT MASK",
-        (0, 0, 255),
-    )
-
-    # =================================================================
     # STAGE 1 - HORIZON
     # =================================================================
 
     horizon_y = horizon.detect(
-        masked
+        frame
     )
 
     horizon_display = horizon.debug_render(
-        masked.copy(),
+        frame.copy(),
         horizon_y
     )
 
@@ -598,7 +512,7 @@ def main():
     # Use the actual LaneEdges implementation.
     edges_roi, edges_raw, hsv_hits = (
         edges_module.compute(
-            masked,
+            frame,
             top_y_override=horizon_y
         )
     )
@@ -645,7 +559,7 @@ def main():
 
     white_mask, yellow_mask, union_mask = (
         lane_color.masks(
-            masked
+            frame
         )
     )
 
@@ -686,7 +600,7 @@ def main():
     # =================================================================
 
     final_edges_display = edge_overlay(
-        masked,
+        frame,
         edges_roi
     )
 
@@ -711,7 +625,7 @@ def main():
     )
 
     hough_display = draw_hough(
-        masked,
+        frame,
         left_segments,
         right_segments,
         discard_segments,
@@ -736,7 +650,7 @@ def main():
         edges_roi
     )
 
-    fit_display = masked.copy()
+    fit_display = frame.copy()
 
     # ---------------------------------------------------------------
     # Draw polynomial curves
@@ -854,9 +768,6 @@ def main():
         "lane_inspection_original.png":
             original_display,
 
-        "lane_inspection_artifact.png":
-            artifact_display,
-
         "lane_inspection_horizon.png":
             horizon_display,
 
@@ -901,14 +812,13 @@ def main():
     for title, image in [
 
         ("1 ORIGINAL", original_display),
-        ("2 ARTIFACT", artifact_display),
-        ("3 HORIZON", horizon_display),
-        ("4 CANNY RAW", canny_raw_display),
-        ("5 ROI EDGES", roi_edges_display),
-        ("6 HSV", hsv_display),
-        ("7 FINAL EDGES", final_edges_display),
-        ("8 HOUGH", hough_display),
-        ("9 POLY FIT", fit_display),
+        ("2 HORIZON", horizon_display),
+        ("3 CANNY RAW", canny_raw_display),
+        ("4 ROI EDGES", roi_edges_display),
+        ("5 HSV", hsv_display),
+        ("6 FINAL EDGES", final_edges_display),
+        ("7 HOUGH", hough_display),
+        ("8 POLY FIT", fit_display),
 
     ]:
 

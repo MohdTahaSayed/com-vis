@@ -29,7 +29,7 @@ from src.io_video import VideoReader
 INPUT = "data/VBOX0011_Trim.mp4"
 
 # Change this to inspect another point in the video
-TIME = 756.0
+TIME = 234.0
 
 OUTPUT = "outputs/roi_horizon_check.png"
 
@@ -112,8 +112,8 @@ vertices = cfg.get("roi", {}).get("vertices")
 if not vertices:
     vertices = [
         [0.10, 0.90],
-        [0.30, 0.55],
-        [0.70, 0.55],
+        [0.30, 0.50],
+        [0.70, 0.50],
         [0.90, 0.90],
     ]
 

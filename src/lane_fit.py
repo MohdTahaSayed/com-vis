@@ -427,7 +427,7 @@ class LaneFitter:
         )
 
     # ========================================================
-    # POLYNOMIAL FIT
+    # LINEAR FIT
     # ========================================================
 
     def _fit_poly(
@@ -441,10 +441,36 @@ class LaneFitter:
 
         try:
 
-            coeffs = np.polyfit(
+            # ------------------------------------------------
+            # LINEAR MODEL
+            #
+            # x = m*y + b
+            # ------------------------------------------------
+
+            linear_coeffs = np.polyfit(
                 y_pixels,
                 x_pixels,
-                2
+                1
+            )
+
+            m, b = linear_coeffs
+
+            # ------------------------------------------------
+            # KEEP THE EXISTING 3-COEFFICIENT INTERFACE
+            #
+            # x = 0*y² + m*y + b
+            #
+            # This keeps lane_validation.py,
+            # lane_state.py and ego_position.py unchanged.
+            # ------------------------------------------------
+
+            coeffs = np.array(
+                [
+                    0.0,
+                    float(m),
+                    float(b)
+                ],
+                dtype=np.float64
             )
 
         except (
@@ -474,7 +500,7 @@ class LaneFitter:
         return coeffs, rms
 
     # ========================================================
-    # CURVE DIRECTION
+    # LINE DIRECTION
     # ========================================================
 
     def _check_curve_direction(
@@ -487,33 +513,44 @@ class LaneFitter:
         if not self.cfg.check_curve_direction:
             return True
 
-        y_bottom = int(
-            height * 0.90
-        )
+        # ----------------------------------------------------
+        # LINEAR MODEL
+        #
+        # coeffs = [0, m, b]
+        #
+        # x = m*y + b
+        #
+        # For this camera:
+        #
+        # LEFT  -> x increases as y increases -> m > 0
+        # RIGHT -> x decreases as y increases -> m < 0
+        # ----------------------------------------------------
 
-        y_top = int(
-            height * 0.55
-        )
+        if len(coeffs) == 3:
 
-        x_bottom = float(
-            np.polyval(
-                coeffs,
-                y_bottom
+            m = float(
+                coeffs[1]
             )
-        )
 
-        x_top = float(
-            np.polyval(
-                coeffs,
-                y_top
+        elif len(coeffs) == 2:
+
+            # Backward compatibility in case a raw
+            # [m, b] array is ever passed.
+            m = float(
+                coeffs[0]
             )
-        )
+
+        else:
+
+            return False
 
         if side == "left":
-            return x_bottom < x_top
+
+            return m > 0
 
         elif side == "right":
-            return x_bottom > x_top
+
+            return m < 0
 
         return True
 

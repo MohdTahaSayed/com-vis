@@ -1,3 +1,4 @@
+```python
 from __future__ import annotations
 
 import argparse
@@ -15,7 +16,6 @@ sys.path.insert(
     os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 )
 
-from src.artifact_mask import ArtifactMask, ArtifactMaskConfig
 from src.horizon import HorizonDetector, HorizonConfig
 from src.lane_color import LaneColor, LaneColorConfig
 from src.lane_roi import LaneROI, RoiConfig
@@ -162,12 +162,6 @@ def main():
     # ---------------------------------------------------------
     # Create pipeline modules
     # ---------------------------------------------------------
-
-    artifact_mask = ArtifactMask(
-        ArtifactMaskConfig.from_dict(
-            cfg.get("artifact_mask", {})
-        )
-    )
 
     horizon = HorizonDetector(
         HorizonConfig.from_dict(
@@ -326,32 +320,24 @@ def main():
     ):
 
         # -----------------------------------------------------
-        # 1. Artifact removal
+        # 1. Horizon detection
         # -----------------------------------------------------
 
-        frame_masked = artifact_mask.apply(
+        horizon_y = horizon.detect(
             frame
         )
 
         # -----------------------------------------------------
-        # 2. Horizon detection
-        # -----------------------------------------------------
-
-        horizon_y = horizon.detect(
-            frame_masked
-        )
-
-        # -----------------------------------------------------
-        # 3. Canny + ROI + HSV reinforcement
+        # 2. Canny + ROI + HSV reinforcement
         # -----------------------------------------------------
 
         edges_roi, edges_raw, hsv_hits = edges_module.compute(
-            frame_masked,
+            frame,
             top_y_override=horizon_y
         )
 
         # -----------------------------------------------------
-        # 4. Sliding-window lane fitting
+        # 3. Sliding-window lane fitting
         #
         # previous_left / previous_right come from the last
         # frame whose corresponding lane passed validation.
@@ -367,7 +353,7 @@ def main():
         )
 
         # -----------------------------------------------------
-        # 5. Lane validation
+        # 4. Lane validation
         #
         # Validation range is anchored to the detected
         # horizon: the upper bound is the max of 0.62*h and
@@ -399,24 +385,23 @@ def main():
         # -----------------------------------------------------
         # GEOMETRY DEBUG
         # -----------------------------------------------------
-        # Print the sampled left/right lane x positions and
-        # the resulting lane width at five y values inside the
-        # validated region. Used to diagnose drift where the
-        # pair check fails even though L and R individually
-        # pass.
-        #
-        # debug_ys is a linear interpolation between
-        # y_range[0] and y_range[1], so all five samples lie
-        # strictly inside the validated band.
-        # -----------------------------------------------------
 
         if left.coeffs is not None and right.coeffs is not None:
 
             debug_ys = np.array([
                 y_range[0],
-                int(y_range[0] + (y_range[1] - y_range[0]) * 0.25),
-                int(y_range[0] + (y_range[1] - y_range[0]) * 0.50),
-                int(y_range[0] + (y_range[1] - y_range[0]) * 0.75),
+                int(
+                    y_range[0]
+                    + (y_range[1] - y_range[0]) * 0.25
+                ),
+                int(
+                    y_range[0]
+                    + (y_range[1] - y_range[0]) * 0.50
+                ),
+                int(
+                    y_range[0]
+                    + (y_range[1] - y_range[0]) * 0.75
+                ),
                 y_range[1]
             ])
 
@@ -452,10 +437,6 @@ def main():
         # -----------------------------------------------------
         # UPDATE TEMPORAL TRACKING STATE
         # -----------------------------------------------------
-        # Only use a polynomial from a frame that passed
-        # validation. This prevents a bad detection from
-        # poisoning the next frame.
-        # -----------------------------------------------------
 
         if (
             validation.left_ok
@@ -470,7 +451,7 @@ def main():
             previous_right = right.coeffs.copy()
 
         # -----------------------------------------------------
-        # 6. Temporal LaneState
+        # 5. Temporal LaneState
         # -----------------------------------------------------
 
         (
@@ -525,7 +506,7 @@ def main():
         )
 
         # -----------------------------------------------------
-        # 7. Visualization
+        # 6. Visualization
         # -----------------------------------------------------
 
         vis = frame.copy()
