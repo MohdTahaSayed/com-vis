@@ -190,6 +190,21 @@ def main():
         help="Write annotated debug video",
     )
 
+    # ---------------------------------------------------------
+    # Tracker reset threshold
+    # ---------------------------------------------------------
+
+    ap.add_argument(
+        "--tracker-reset-frames",
+        type=int,
+        default=20,
+        help=(
+            "After this many consecutive MISS frames on a side, "
+            "forget the previous coeffs so the fitter falls back "
+            "to the histogram base and reacquires the lane."
+        ),
+    )
+
     args = ap.parse_args()
 
     # ========================================================
@@ -426,6 +441,18 @@ def main():
         f"ego sample  = every {sample_step} frames"
     )
 
+    print(
+        f"tracker reset = after "
+        f"{args.tracker_reset_frames} consecutive MISS"
+    )
+
+    print(
+        f"lane-change detector = "
+        f"lane-centre jump "
+        f"(thr frac={lane_change_detector.cfg.relative_jump_frac}, "
+        f"abs={lane_change_detector.cfg.jump_px_threshold}px)"
+    )
+
     print("=" * 70)
 
     # ========================================================
@@ -474,6 +501,16 @@ def main():
     raw_sign_detections = 0
 
     # --------------------------------------------------------
+    # Temporal tracker state (for LaneFitter)
+    # --------------------------------------------------------
+
+    previous_left = None
+    previous_right = None
+
+    left_miss_count = 0
+    right_miss_count = 0
+
+    # --------------------------------------------------------
     # Every frame
     # --------------------------------------------------------
 
@@ -501,15 +538,13 @@ def main():
         )
 
         # ====================================================
-        # 3. LANE FIT
-        #
-        # IMPORTANT:
-        # Pass the original frame to the fitter.
+        # 3. LANE FIT (with temporal tracking)
         # ====================================================
 
         left, right = fitter.fit(
             edges_roi,
-            frame=frame,
+            previous_left=previous_left,
+            previous_right=previous_right,
         )
 
         # ====================================================
@@ -529,6 +564,36 @@ def main():
             y_range,
             w,
         )
+
+        # ====================================================
+        # 4b. UPDATE TRACKER (with miss-counter reset)
+        # ====================================================
+
+        # ---- LEFT ----
+        if (
+            validation.left_ok
+            and left.coeffs is not None
+        ):
+            previous_left = left.coeffs.copy()
+            left_miss_count = 0
+        else:
+            left_miss_count += 1
+            if left_miss_count >= args.tracker_reset_frames:
+                previous_left = None
+                left_miss_count = 0
+
+        # ---- RIGHT ----
+        if (
+            validation.right_ok
+            and right.coeffs is not None
+        ):
+            previous_right = right.coeffs.copy()
+            right_miss_count = 0
+        else:
+            right_miss_count += 1
+            if right_miss_count >= args.tracker_reset_frames:
+                previous_right = None
+                right_miss_count = 0
 
         # ====================================================
         # 5. TEMPORAL STATE
@@ -690,13 +755,14 @@ def main():
             )
 
             # =================================================
-            # 7. LANE CHANGE DETECTION
+            # 7. LANE CHANGE DETECTION — lane-centre jump
             # =================================================
 
             event = lane_change_detector.feed(
                 idx,
                 ts,
-                offset_normalized,
+                measurement.lane_center_x,
+                measurement.lane_width_px,
                 status,
             )
 
@@ -713,7 +779,25 @@ def main():
                     f"[LANE CHANGE] "
                     f"t={event.timestamp_s:.2f}s "
                     f"direction={event.direction} "
-                    f"magnitude={event.magnitude:.3f}"
+                    f"magnitude={event.magnitude:.1f}px "
+                    f"(raw jump={event.jump_px:+.1f}px)"
+                )
+
+                # ---------------------------------------------
+                # Reset state + tracker after lane change
+                # ---------------------------------------------
+
+                state.reset()
+
+                previous_left = None
+                previous_right = None
+
+                left_miss_count = 0
+                right_miss_count = 0
+
+                print(
+                    "[LANE CHANGE] "
+                    "LaneState + tracker reset"
                 )
 
         # ====================================================
@@ -816,6 +900,10 @@ def main():
 
                 f"frame={idx} "
                 f"t={ts:.2f}s",
+
+                f"Tracker misses: "
+                f"L={left_miss_count} "
+                f"R={right_miss_count}",
             ]
 
             for i, text in enumerate(

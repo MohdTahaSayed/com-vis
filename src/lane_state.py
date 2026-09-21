@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -38,6 +37,7 @@ class SideState:
         self.smoothed_coeffs = None
         self.last_valid_coeffs = None
         self.fail_count = 0
+        self.ok_count = 0
         self.confidence = 0.0
 
 
@@ -49,10 +49,37 @@ class LaneState:
         self.left = SideState()
         self.right = SideState()
 
-    def _update_side(self, state: SideState,
-                     coeffs: Optional[np.ndarray],
-                     confidence: float) -> Tuple[Optional[np.ndarray], str, float]:
-        valid = (coeffs is not None) and (confidence >= self.cfg.min_confidence)
+    # ========================================================
+    # NEW: manual reset (called on lane-change events)
+    # ========================================================
+
+    def reset(self):
+        """
+        Wipe both sides completely.
+
+        Called externally when the pipeline detects a lane change,
+        so the next frame starts fresh and re-acquires the new
+        ego-lane boundaries instead of holding stale coefficients
+        from before the lane change.
+        """
+        self.left.reset()
+        self.right.reset()
+
+    # ========================================================
+    # SIDE UPDATE
+    # ========================================================
+
+    def _update_side(
+        self,
+        state: SideState,
+        coeffs: Optional[np.ndarray],
+        confidence: float,
+    ) -> Tuple[Optional[np.ndarray], str, float]:
+
+        valid = (
+            (coeffs is not None)
+            and (confidence >= self.cfg.min_confidence)
+        )
 
         if valid:
             state.fail_count = 0
@@ -64,34 +91,65 @@ class LaneState:
             else:
                 a = self.cfg.smoothing_alpha
                 state.last_valid_coeffs = coeffs.copy()
-                state.smoothed_coeffs = (1 - a) * state.smoothed_coeffs + a * coeffs
+                state.smoothed_coeffs = (
+                    (1 - a) * state.smoothed_coeffs
+                    + a * coeffs
+                )
 
             state.status = "OK"
             state.confidence = float(confidence)
             return state.smoothed_coeffs.copy(), "OK", float(confidence)
 
+        # ---------------------------------------------------
+        # INVALID frame
+        # ---------------------------------------------------
+
         state.fail_count += 1
-        if state.smoothed_coeffs is not None and state.fail_count <= self.cfg.hold_frames:
+
+        # HOLD: still within hold window
+        if (
+            state.smoothed_coeffs is not None
+            and state.fail_count <= self.cfg.hold_frames
+        ):
             state.status = "HOLD"
             state.confidence = max(0.0, state.confidence * 0.85)
             return state.smoothed_coeffs.copy(), "HOLD", state.confidence
-        else:
-            state.status = "MISS"
-            state.confidence = 0.0
-            if state.fail_count >= self.cfg.miss_frames:
-                state.smoothed_coeffs = None
-                state.last_valid_coeffs = None
-            return None, "MISS", 0.0
 
-    def update(self,
-               left_coeffs: Optional[np.ndarray], left_conf: float,
-               right_coeffs: Optional[np.ndarray], right_conf: float):
+        # MISS: past hold window
+        state.status = "MISS"
+        state.confidence = 0.0
+
+        if state.fail_count >= self.cfg.miss_frames:
+            state.smoothed_coeffs = None
+            state.last_valid_coeffs = None
+
+        return None, "MISS", 0.0
+
+    # ========================================================
+    # PUBLIC UPDATE
+    # ========================================================
+
+    def update(
+        self,
+        left_coeffs: Optional[np.ndarray],
+        left_conf: float,
+        right_coeffs: Optional[np.ndarray],
+        right_conf: float,
+    ):
         l = self._update_side(self.left, left_coeffs, left_conf)
         r = self._update_side(self.right, right_coeffs, right_conf)
         return l, r
 
+    # ========================================================
+    # DEBUG
+    # ========================================================
+
     def debug_summary(self) -> str:
-        return (f"L={self.left.status}(c={self.left.confidence:.2f},"
-                f"fail={self.left.fail_count})  "
-                f"R={self.right.status}(c={self.right.confidence:.2f},"
-                f"fail={self.right.fail_count})")
+        return (
+            f"L={self.left.status}"
+            f"(c={self.left.confidence:.2f},"
+            f"fail={self.left.fail_count})  "
+            f"R={self.right.status}"
+            f"(c={self.right.confidence:.2f},"
+            f"fail={self.right.fail_count})"
+        )

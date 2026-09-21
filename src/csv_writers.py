@@ -70,3 +70,48 @@ class LaneChangesCSV:
 
     def close(self):
         self.file.close()
+
+
+class SignsCSV:
+    def __init__(self, path: str):
+        self.file = open(path, "w", newline="", encoding="utf-8")
+        self.writer = csv.writer(self.file)
+
+        self.writer.writerow([
+            "timestamp_s",
+            "frame",
+            "class_name",
+            "category",
+            "x1",
+            "y1",
+            "x2",
+            "y2",
+            "confidence",
+        ])
+
+    def row(
+        self,
+        timestamp_s,
+        frame,
+        class_name,
+        category,
+        x1,
+        y1,
+        x2,
+        y2,
+        confidence,
+    ):
+        self.writer.writerow([
+            timestamp_s,
+            frame,
+            class_name,
+            category,
+            x1,
+            y1,
+            x2,
+            y2,
+            confidence,
+        ])
+
+    def close(self):
+        self.file.close()

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from collections import deque
@@ -10,10 +9,40 @@ import numpy as np
 
 @dataclass
 class LaneChangeConfig:
-    window_samples: int = 8
-    lane_state_thresh: float = 0.15
-    min_peak_magnitude: float = 0.25
-    cooldown_samples: int = 10
+    # ----------------------------------------------------------
+    # Jump-based detection
+    # ----------------------------------------------------------
+    # A lane change is detected when the *lane centre x* moves
+    # by more than `jump_px_threshold` within `jump_window_samples`
+    # consecutive valid samples.
+    #
+    # In a typical dashcam view, one lane width is ~250-400 px.
+    # Half of that (~150 px) is a safe minimum to distinguish a
+    # real lane change from small lateral drift.
+    jump_px_threshold: float = 150.0
+
+    # Median filter window — smooths per-sample noise before
+    # comparing current lane centre to a recent baseline.
+    smooth_window: int = 5
+
+    # How many recent samples to look back when computing the
+    # baseline. A larger window means slower but more stable
+    # detection.
+    baseline_window: int = 15
+
+    # Cooldown (in samples) after a fired event — prevents
+    # double-firing on the same lane change.
+    cooldown_samples: int = 15
+
+    # If lane_width_px is available, we scale jump threshold by
+    # this fraction of lane width. Set to 0 to use the fixed
+    # jump_px_threshold instead.
+    #
+    # Recommended: 0.55  → jump must exceed ~55% of a lane width
+    relative_jump_frac: float = 0.55
+
+    # Minimum confidence required to accept a sample.
+    min_confidence: float = 0.15
 
     @classmethod
     def from_dict(cls, d: Dict) -> "LaneChangeConfig":
@@ -29,80 +58,138 @@ class LaneChangeConfig:
 class LaneChangeEvent:
     frame: int
     timestamp_s: float
-    direction: str
-    magnitude: float
+    direction: str          # "LEFT" or "RIGHT"
+    magnitude: float        # |jump| in pixels (smoothed)
+    jump_px: float          # raw signed jump in pixels
 
 
 class LaneChangeDetector:
+    """
+    Lane-change detector based on lane-centre motion.
+
+    Consumes per-sample (frame, ts, lane_center_x, lane_width_px,
+    status) tuples and emits a LaneChangeEvent whenever the smoothed
+    lane centre shifts by more than the configured threshold within
+    a short window.
+
+    Direction semantics:
+        lane centre moves RIGHT  →  direction = "RIGHT"
+        lane centre moves LEFT   →  direction = "LEFT"
+
+    This matches the physical motion of the ego vehicle.
+    """
+
     def __init__(self, cfg: LaneChangeConfig):
         self.cfg = cfg
         self.reset()
 
+    # ========================================================
+    # RESET
+    # ========================================================
+
     def reset(self):
-        self._window: Deque[float] = deque(maxlen=self.cfg.window_samples)
-        self._last_state: str = "UNKNOWN"
+        self._smooth: Deque[float] = deque(maxlen=self.cfg.smooth_window)
+        self._history: Deque[float] = deque(maxlen=self.cfg.baseline_window)
         self._cooldown: int = 0
-        self._peak_since_transition: float = 0.0
 
-    def _classify(self, median: float) -> str:
-        if median <= -self.cfg.lane_state_thresh:
-            return "LEFT"
-        if median >= self.cfg.lane_state_thresh:
-            return "RIGHT"
-        return "NEUTRAL"
+    # ========================================================
+    # MAIN FEED
+    # ========================================================
 
-    def feed(self,
-             frame: int,
-             timestamp_s: float,
-             offset_norm: Optional[float],
-             status: str) -> Optional[LaneChangeEvent]:
-        if status != "OK" or offset_norm is None:
+    def feed(
+        self,
+        frame: int,
+        timestamp_s: float,
+        lane_center_x: Optional[float],
+        lane_width_px: Optional[float],
+        status: str,
+    ) -> Optional[LaneChangeEvent]:
+        """
+        Call once per sample.
+
+        Returns a LaneChangeEvent if a lane change was just detected,
+        otherwise None.
+        """
+
+        # ---------------------------------------------------
+        # GATE
+        # ---------------------------------------------------
+
+        if status != "OK" or lane_center_x is None:
             return None
 
-        offset_norm = max(-0.5, min(0.5, float(offset_norm)))
+        # ---------------------------------------------------
+        # SMOOTH the raw signal
+        # ---------------------------------------------------
+
+        self._smooth.append(float(lane_center_x))
+        smoothed = float(np.median(self._smooth))
+
+        # ---------------------------------------------------
+        # COOLDOWN
+        # ---------------------------------------------------
 
         if self._cooldown > 0:
             self._cooldown -= 1
-            self._window.append(offset_norm)
+            self._history.append(smoothed)
             return None
 
-        self._window.append(offset_norm)
+        # ---------------------------------------------------
+        # NEED ENOUGH HISTORY
+        # ---------------------------------------------------
 
-        if len(self._window) < self.cfg.window_samples:
+        if len(self._history) < self.cfg.baseline_window:
+            self._history.append(smoothed)
             return None
 
-        med = float(np.median(self._window))
-        state = self._classify(med)
+        # ---------------------------------------------------
+        # BASELINE = median of the recent history (excluding now)
+        # ---------------------------------------------------
 
-        if state in ("LEFT", "RIGHT"):
-            self._peak_since_transition = max(
-                self._peak_since_transition, abs(offset_norm)
-            )
+        baseline = float(np.median(self._history))
+
+        # ---------------------------------------------------
+        # THRESHOLD
+        # ---------------------------------------------------
+
+        if (
+            self.cfg.relative_jump_frac > 0
+            and lane_width_px is not None
+            and lane_width_px > 0
+        ):
+            threshold = self.cfg.relative_jump_frac * float(lane_width_px)
         else:
-            self._peak_since_transition = 0.0
+            threshold = self.cfg.jump_px_threshold
 
-        if (state in ("LEFT", "RIGHT")
-                and self._last_state in ("LEFT", "RIGHT")
-                and state != self._last_state):
-            direction = "RIGHT" if state == "RIGHT" else "LEFT"
+        jump = smoothed - baseline
 
-            if self._peak_since_transition >= self.cfg.min_peak_magnitude:
-                ev = LaneChangeEvent(
-                    frame=frame,
-                    timestamp_s=timestamp_s,
-                    direction=direction,
-                    magnitude=float(self._peak_since_transition),
-                )
-                self._cooldown = self.cfg.cooldown_samples
-                self._peak_since_transition = abs(offset_norm)
-                self._last_state = state
-                return ev
-            else:
-                self._last_state = state
-                self._peak_since_transition = abs(offset_norm)
-                return None
+        # ---------------------------------------------------
+        # DETECT
+        # ---------------------------------------------------
 
-        if state in ("LEFT", "RIGHT"):
-            self._last_state = state
+        if abs(jump) < threshold:
+            self._history.append(smoothed)
+            return None
 
-        return None
+        direction = "RIGHT" if jump > 0 else "LEFT"
+
+        event = LaneChangeEvent(
+            frame=frame,
+            timestamp_s=timestamp_s,
+            direction=direction,
+            magnitude=float(abs(jump)),
+            jump_px=float(jump),
+        )
+
+        # ---------------------------------------------------
+        # POST-EVENT STATE
+        # ---------------------------------------------------
+
+        self._cooldown = self.cfg.cooldown_samples
+
+        # Reset history so we don't immediately re-fire on the
+        # same jump. Seed history with the current smoothed value.
+        self._history.clear()
+        self._history.append(smoothed)
+
+        return event

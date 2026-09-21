@@ -96,10 +96,10 @@ roi:
   enabled: true
 
   vertices:
-    - [-0.10, 0.90]
-    - [0.45, 0.55]
-    - [0.58, 0.50]
-    - [1.15, 0.89]
+    - [-0.10,0.90]
+    - [0.35, 0.50]
+    - [0.68, 0.50]
+    - [1.10, 0.90]
 
 
 # =====================================================================
@@ -107,25 +107,29 @@ roi:
 # =====================================================================
 
 sliding_window:
+
+sliding_window:
   n_windows: 20
-  window_width_frac: 0.15
-  min_pixels_to_recenter: 15
-  min_pixels_total: 100
-  min_pixels_per_window: 6
-  max_fit_rms_px: 25.0
+  window_width_frac: 0.18               # was 0.15 → wider windows
+  min_pixels_to_recenter: 10            # was 15
+  min_pixels_total: 80                  # was 100
+  min_pixels_per_window: 5
+  max_fit_rms_px: 30.0   
 
   vanishing_x_frac: 0.50
   left_max_x_frac: 0.58
   right_min_x_frac: 0.42
 
-  max_recenter_jump_frac: 0.04
+  max_recenter_jump_frac: 0.08
   check_curve_direction: true
 
   left_base_shift_px: -20
   right_base_shift_px: 0
 
   tracking_enabled: true
-  tracking_margin_px: 70
+  tracking_margin_px: 150
+
+  
 
 
 # =====================================================================
@@ -144,10 +148,10 @@ validation:
 # =====================================================================
 
 lane_state:
-  hold_frames: 8
-  miss_frames: 20
+  hold_frames: 15
+  miss_frames: 25
   smoothing_alpha: 0.30
-  min_confidence: 0.15
+  min_confidence: 0.10
 
 
 # =====================================================================
@@ -164,11 +168,18 @@ ego_position:
 # =====================================================================
 
 lane_change:
-  window_samples: 8
-  lane_state_thresh: 0.15
-  min_peak_magnitude: 0.25
-  cooldown_samples: 10
 
+  jump_px_threshold: 150.0
+
+  smooth_window: 5
+
+  baseline_window: 15
+
+  cooldown_samples: 15
+
+  relative_jump_frac: 0.55
+
+  min_confidence: 0.15
 
 # =====================================================================
 # Road sign detection
