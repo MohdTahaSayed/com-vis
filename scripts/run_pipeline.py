@@ -422,8 +422,6 @@ def main():
     fps = vr.info.fps
 
     # sample_step for ego position
-    #   ego_hz = 1.0 → step = fps
-    #   ego_hz = 2.0 → step = fps/2
     if args.ego_hz <= 0:
         sample_step = int(round(fps))
     else:
@@ -471,12 +469,11 @@ def main():
 
     print(
         f"lane-change detector = "
-        f"lane-centre jump "
-        f"(thr frac={lane_change_detector.cfg.relative_jump_frac}, "
-        f"abs={lane_change_detector.cfg.jump_px_threshold}px, "
-        f"width sanity "
-        f"[{lane_change_detector.cfg.lane_width_min_px}, "
-        f"{lane_change_detector.cfg.lane_width_max_px}]px)"
+        f"boundary-shift "
+        f"(shift frac={lane_change_detector.cfg.min_boundary_shift_frac}, "
+        f"abs={lane_change_detector.cfg.min_boundary_shift_px}px, "
+        f"persist={lane_change_detector.cfg.persist_samples}, "
+        f"alternation={lane_change_detector.cfg.enforce_alternation})"
     )
 
     print("=" * 70)
@@ -700,6 +697,31 @@ def main():
                 min_conf = 0.0
 
             # ------------------------------------------------
+            # Compute left/right boundary x at ego eval row
+            # ------------------------------------------------
+
+            y_eval = int(
+                ego.cfg.lane_eval_y_frac * h
+            )
+
+            left_x_eval = None
+            right_x_eval = None
+
+            if l_coeffs is not None:
+                left_x_eval = float(
+                    l_coeffs[0] * y_eval * y_eval
+                    + l_coeffs[1] * y_eval
+                    + l_coeffs[2]
+                )
+
+            if r_coeffs is not None:
+                right_x_eval = float(
+                    r_coeffs[0] * y_eval * y_eval
+                    + r_coeffs[1] * y_eval
+                    + r_coeffs[2]
+                )
+
+            # ------------------------------------------------
             # Valid ego measurement
             # ------------------------------------------------
 
@@ -787,13 +809,14 @@ def main():
             )
 
             # =================================================
-            # 7. LANE CHANGE DETECTION — lane-centre jump
+            # 7. LANE CHANGE DETECTION — boundary-shift
             # =================================================
 
             event = lane_change_detector.feed(
                 idx,
                 ts,
-                measurement.lane_center_x,
+                left_x_eval,
+                right_x_eval,
                 measurement.lane_width_px,
                 status,
             )
@@ -812,7 +835,8 @@ def main():
                     f"t={event.timestamp_s:.2f}s "
                     f"direction={event.direction} "
                     f"magnitude={event.magnitude:.1f}px "
-                    f"(raw jump={event.jump_px:+.1f}px)"
+                    f"(dL={event.delta_left_px:+.1f}, "
+                    f"dR={event.delta_right_px:+.1f})"
                 )
 
                 # ---------------------------------------------
