@@ -205,6 +205,21 @@ def main():
         ),
     )
 
+    # ---------------------------------------------------------
+    # Ego sampling rate
+    # ---------------------------------------------------------
+
+    ap.add_argument(
+        "--ego-hz",
+        type=float,
+        default=2.0,
+        help=(
+            "Sampling rate for ego position / lane change detection. "
+            "Default 2 Hz — 1 Hz is too coarse for reliable lane-change "
+            "detection."
+        ),
+    )
+
     args = ap.parse_args()
 
     # ========================================================
@@ -406,9 +421,16 @@ def main():
 
     fps = vr.info.fps
 
-    sample_step = int(
-        round(fps)
-    )
+    # sample_step for ego position
+    #   ego_hz = 1.0 → step = fps
+    #   ego_hz = 2.0 → step = fps/2
+    if args.ego_hz <= 0:
+        sample_step = int(round(fps))
+    else:
+        sample_step = max(
+            1,
+            int(round(fps / args.ego_hz))
+        )
 
     print()
     print("=" * 70)
@@ -438,7 +460,8 @@ def main():
     )
 
     print(
-        f"ego sample  = every {sample_step} frames"
+        f"ego sample  = every {sample_step} frames "
+        f"({args.ego_hz:.2f} Hz)"
     )
 
     print(
@@ -450,7 +473,10 @@ def main():
         f"lane-change detector = "
         f"lane-centre jump "
         f"(thr frac={lane_change_detector.cfg.relative_jump_frac}, "
-        f"abs={lane_change_detector.cfg.jump_px_threshold}px)"
+        f"abs={lane_change_detector.cfg.jump_px_threshold}px, "
+        f"width sanity "
+        f"[{lane_change_detector.cfg.lane_width_min_px}, "
+        f"{lane_change_detector.cfg.lane_width_max_px}]px)"
     )
 
     print("=" * 70)
@@ -566,7 +592,7 @@ def main():
         )
 
         # ====================================================
-        # 4b. UPDATE TRACKER (with miss-counter reset)
+        # 4b. UPDATE TRACKER (miss-counter reset)
         # ====================================================
 
         # ---- LEFT ----
@@ -627,7 +653,7 @@ def main():
         )
 
         # ====================================================
-        # 6. EGO POSITION — 1 Hz
+        # 6. EGO POSITION — sampled at --ego-hz
         # ====================================================
 
         if idx % sample_step == 0:
@@ -724,7 +750,7 @@ def main():
                 lane_miss_samples += 1
 
             # ------------------------------------------------
-            # Write ego CSV
+            # Write ego CSV (with lane_center_x)
             # ------------------------------------------------
 
             ego_csv.row(
@@ -746,6 +772,12 @@ def main():
                 (
                     f"{offset_normalized:.3f}"
                     if offset_normalized is not None
+                    else ""
+                ),
+
+                (
+                    f"{measurement.lane_center_x:.1f}"
+                    if measurement.lane_center_x is not None
                     else ""
                 ),
 

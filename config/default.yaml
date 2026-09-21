@@ -166,20 +166,15 @@ ego_position:
 # =====================================================================
 # Lane change detection
 # =====================================================================
-
 lane_change:
-
-  jump_px_threshold: 150.0
-
-  smooth_window: 5
-
-  baseline_window: 15
-
-  cooldown_samples: 15
-
-  relative_jump_frac: 0.55
-
+  jump_px_threshold: 60.0
+  smooth_window: 3
+  baseline_window: 5
+  cooldown_samples: 10
+  relative_jump_frac: 0.18
   min_confidence: 0.15
+  lane_width_min_px: 100.0
+  lane_width_max_px: 700.0
 
 # =====================================================================
 # Road sign detection

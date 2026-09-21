@@ -13,36 +13,40 @@ class LaneChangeConfig:
     # Jump-based detection
     # ----------------------------------------------------------
     # A lane change is detected when the *lane centre x* moves
-    # by more than `jump_px_threshold` within `jump_window_samples`
-    # consecutive valid samples.
+    # by more than `jump_px_threshold` (or, if lane_width is
+    # available, `relative_jump_frac * lane_width`) within
+    # `baseline_window` consecutive valid samples.
     #
-    # In a typical dashcam view, one lane width is ~250-400 px.
-    # Half of that (~150 px) is a safe minimum to distinguish a
-    # real lane change from small lateral drift.
-    jump_px_threshold: float = 150.0
-
-    # Median filter window — smooths per-sample noise before
-    # comparing current lane centre to a recent baseline.
-    smooth_window: int = 5
-
-    # How many recent samples to look back when computing the
-    # baseline. A larger window means slower but more stable
-    # detection.
-    baseline_window: int = 15
-
-    # Cooldown (in samples) after a fired event — prevents
-    # double-firing on the same lane change.
-    cooldown_samples: int = 15
-
-    # If lane_width_px is available, we scale jump threshold by
-    # this fraction of lane width. Set to 0 to use the fixed
-    # jump_px_threshold instead.
+    # Direction semantics:
+    #   lane centre moves RIGHT in image  →  direction = "LEFT"  (ego moved LEFT)
+    #   lane centre moves LEFT  in image  →  direction = "RIGHT" (ego moved RIGHT)
     #
-    # Recommended: 0.55  → jump must exceed ~55% of a lane width
-    relative_jump_frac: float = 0.55
+    # Why inverted? Because the lane centre x is measured in a
+    # fixed image frame. When the ego moves left, the visible
+    # scene (and hence the detected lane centre) shifts RIGHT.
+    jump_px_threshold: float = 60.0
+
+    # Median filter window for smoothing the raw lane-centre signal
+    smooth_window: int = 3
+
+    # How many recent samples to consider when computing the
+    # baseline (median of the older end of this deque).
+    baseline_window: int = 5
+
+    # Cooldown (in samples) after firing an event.
+    cooldown_samples: int = 10
+
+    # Scale jump threshold by lane width. Set to 0 to use only
+    # the fixed `jump_px_threshold`.
+    relative_jump_frac: float = 0.18
 
     # Minimum confidence required to accept a sample.
     min_confidence: float = 0.15
+
+    # Sanity bounds for lane width (px). If a measurement's
+    # lane_width falls outside this range, we skip the sample.
+    lane_width_min_px: float = 100.0
+    lane_width_max_px: float = 700.0
 
     @classmethod
     def from_dict(cls, d: Dict) -> "LaneChangeConfig":
@@ -58,9 +62,9 @@ class LaneChangeConfig:
 class LaneChangeEvent:
     frame: int
     timestamp_s: float
-    direction: str          # "LEFT" or "RIGHT"
-    magnitude: float        # |jump| in pixels (smoothed)
-    jump_px: float          # raw signed jump in pixels
+    direction: str          # "LEFT" or "RIGHT" (ego motion)
+    magnitude: float        # |jump| in pixels
+    jump_px: float          # raw signed jump in image x
 
 
 class LaneChangeDetector:
@@ -72,11 +76,9 @@ class LaneChangeDetector:
     lane centre shifts by more than the configured threshold within
     a short window.
 
-    Direction semantics:
-        lane centre moves RIGHT  →  direction = "RIGHT"
-        lane centre moves LEFT   →  direction = "LEFT"
-
-    This matches the physical motion of the ego vehicle.
+    Direction semantics (physical ego motion):
+        lane centre moves RIGHT in image  →  ego moved LEFT
+        lane centre moves LEFT  in image  →  ego moved RIGHT
     """
 
     def __init__(self, cfg: LaneChangeConfig):
@@ -105,21 +107,30 @@ class LaneChangeDetector:
         status: str,
     ) -> Optional[LaneChangeEvent]:
         """
-        Call once per sample.
-
         Returns a LaneChangeEvent if a lane change was just detected,
         otherwise None.
         """
 
         # ---------------------------------------------------
-        # GATE
+        # GATE — status
         # ---------------------------------------------------
 
         if status != "OK" or lane_center_x is None:
             return None
 
         # ---------------------------------------------------
-        # SMOOTH the raw signal
+        # GATE — lane width sanity
+        # ---------------------------------------------------
+
+        if lane_width_px is not None:
+            if (
+                lane_width_px < self.cfg.lane_width_min_px
+                or lane_width_px > self.cfg.lane_width_max_px
+            ):
+                return None
+
+        # ---------------------------------------------------
+        # SMOOTH raw signal
         # ---------------------------------------------------
 
         self._smooth.append(float(lane_center_x))
@@ -135,16 +146,12 @@ class LaneChangeDetector:
             return None
 
         # ---------------------------------------------------
-        # NEED ENOUGH HISTORY
+        # BASELINE = median of the recent history
         # ---------------------------------------------------
 
         if len(self._history) < self.cfg.baseline_window:
             self._history.append(smoothed)
             return None
-
-        # ---------------------------------------------------
-        # BASELINE = median of the recent history (excluding now)
-        # ---------------------------------------------------
 
         baseline = float(np.median(self._history))
 
@@ -171,7 +178,12 @@ class LaneChangeDetector:
             self._history.append(smoothed)
             return None
 
-        direction = "RIGHT" if jump > 0 else "LEFT"
+        # ---------------------------------------------------
+        # DIRECTION (inverted because lane centre moves opposite
+        # to ego motion when measured in the fixed image frame)
+        # ---------------------------------------------------
+
+        direction = "LEFT" if jump > 0 else "RIGHT"
 
         event = LaneChangeEvent(
             frame=frame,
