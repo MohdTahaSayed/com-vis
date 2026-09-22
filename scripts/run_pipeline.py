@@ -190,10 +190,6 @@ def main():
         help="Write annotated debug video",
     )
 
-    # ---------------------------------------------------------
-    # Tracker reset threshold
-    # ---------------------------------------------------------
-
     ap.add_argument(
         "--tracker-reset-frames",
         type=int,
@@ -205,10 +201,6 @@ def main():
         ),
     )
 
-    # ---------------------------------------------------------
-    # Ego CSV sampling rate (deliverable requirement: 1 Hz)
-    # ---------------------------------------------------------
-
     ap.add_argument(
         "--ego-hz",
         type=float,
@@ -218,10 +210,6 @@ def main():
             "Default 1 Hz (deliverable requirement)."
         ),
     )
-
-    # ---------------------------------------------------------
-    # Lane-change detection sampling rate (internal)
-    # ---------------------------------------------------------
 
     ap.add_argument(
         "--lane-change-hz",
@@ -248,43 +236,27 @@ def main():
         args.config
     )
 
-    # --------------------------------------------------------
-    # Lane pipeline modules
-    # --------------------------------------------------------
-
     horizon = HorizonDetector(
         HorizonConfig.from_dict(
-            cfg.get(
-                "horizon",
-                {}
-            )
+            cfg.get("horizon", {})
         )
     )
 
     roi = LaneROI(
         RoiConfig.from_dict(
-            cfg.get(
-                "roi",
-                {}
-            )
+            cfg.get("roi", {})
         )
     )
 
     lane_color = LaneColor(
         LaneColorConfig.from_dict(
-            cfg.get(
-                "lane_color",
-                {}
-            )
+            cfg.get("lane_color", {})
         )
     )
 
     edges_module = LaneEdges(
         CannyConfig.from_dict(
-            cfg.get(
-                "canny",
-                {}
-            )
+            cfg.get("canny", {})
         ),
         roi,
         lane_color,
@@ -293,61 +265,36 @@ def main():
 
     fitter = LaneFitter(
         SlidingWindowConfig.from_dict(
-            cfg.get(
-                "sliding_window",
-                {}
-            )
+            cfg.get("sliding_window", {})
         )
     )
 
     validator = LaneValidation(
         ValidationConfig.from_dict(
-            cfg.get(
-                "validation",
-                {}
-            )
+            cfg.get("validation", {})
         )
     )
 
     state = LaneState(
         StateConfig.from_dict(
-            cfg.get(
-                "lane_state",
-                {}
-            )
+            cfg.get("lane_state", {})
         )
     )
 
     ego = EgoPosition(
         EgoConfig.from_dict(
-            cfg.get(
-                "ego_position",
-                {}
-            )
+            cfg.get("ego_position", {})
         )
     )
 
     lane_change_detector = LaneChangeDetector(
         LaneChangeConfig.from_dict(
-            cfg.get(
-                "lane_change",
-                {}
-            )
+            cfg.get("lane_change", {})
         )
     )
 
-    # --------------------------------------------------------
-    # Minimum confidence
-    # --------------------------------------------------------
-
     MIN_CONF = float(
-        cfg.get(
-            "lane_state",
-            {}
-        ).get(
-            "min_confidence",
-            0.15,
-        )
+        cfg.get("lane_state", {}).get("min_confidence", 0.15)
     )
 
     # ========================================================
@@ -359,88 +306,51 @@ def main():
 
     if (
         HAVE_SIGNS
-        and cfg.get(
-            "sign_detect",
-            {}
-        ).get(
-            "enabled",
-            True,
-        )
+        and cfg.get("sign_detect", {}).get("enabled", True)
     ):
-
         try:
-
             sign_detector = SignDetector(
                 SignDetectConfig.from_dict(
-                    cfg.get(
-                        "sign_detect",
-                        {}
-                    )
+                    cfg.get("sign_detect", {})
                 )
             )
-
             sign_tracker = SignTracker(
                 SignTrackConfig.from_dict(
-                    cfg.get(
-                        "sign_track",
-                        {}
-                    )
+                    cfg.get("sign_track", {})
                 )
             )
-
-            print(
-                "[info] sign detection ENABLED"
-            )
-
+            print("[info] sign detection ENABLED")
         except Exception as e:
-
-            print(
-                f"[warn] sign detector failed "
-                f"to initialize: {e}"
-            )
+            print(f"[warn] sign detector failed to initialize: {e}")
 
     # ========================================================
     # CSV OUTPUTS
     # ========================================================
 
     ego_csv = EgoPositionCSV(
-        os.path.join(
-            args.outdir,
-            "ego_position.csv",
-        )
+        os.path.join(args.outdir, "ego_position.csv")
     )
 
     lane_change_csv = LaneChangesCSV(
-        os.path.join(
-            args.outdir,
-            "lane_changes.csv",
-        )
+        os.path.join(args.outdir, "lane_changes.csv")
     )
 
     sign_csv = SignsCSV(
-        os.path.join(
-            args.outdir,
-            "signs.csv",
-        )
+        os.path.join(args.outdir, "signs.csv")
     )
 
     # ========================================================
     # VIDEO
     # ========================================================
 
-    vr = VideoReader(
-        args.input
-    )
-
+    vr = VideoReader(args.input)
     fps = vr.info.fps
 
-    # ego position sample step (CSV output rate)
     if args.ego_hz <= 0:
         ego_step = int(round(fps))
     else:
         ego_step = max(1, int(round(fps / args.ego_hz)))
 
-    # lane-change sample step (internal detection rate)
     if args.lane_change_hz <= 0:
         lc_step = int(round(fps))
     else:
@@ -451,50 +361,22 @@ def main():
     print("IITB LANE ANALYTICS PIPELINE")
     print("=" * 70)
 
-    print(
-        f"video       = {args.input}"
-    )
-
-    print(
-        f"resolution  = "
-        f"{vr.info.width}x{vr.info.height}"
-    )
-
-    print(
-        f"fps         = {fps:.2f}"
-    )
-
-    print(
-        f"frames      = {vr.info.frame_count}"
-    )
-
-    print(
-        f"duration    = "
-        f"{vr.info.duration_s:.2f}s"
-    )
-
-    print(
-        f"ego CSV     = every {ego_step} frames "
-        f"({args.ego_hz:.2f} Hz)"
-    )
-
-    print(
-        f"lane-change = every {lc_step} frames "
-        f"({args.lane_change_hz:.2f} Hz, internal)"
-    )
-
-    print(
-        f"tracker reset = after "
-        f"{args.tracker_reset_frames} consecutive MISS"
-    )
+    print(f"video       = {args.input}")
+    print(f"resolution  = {vr.info.width}x{vr.info.height}")
+    print(f"fps         = {fps:.2f}")
+    print(f"frames      = {vr.info.frame_count}")
+    print(f"duration    = {vr.info.duration_s:.2f}s")
+    print(f"ego CSV     = every {ego_step} frames ({args.ego_hz:.2f} Hz)")
+    print(f"lane-change = every {lc_step} frames ({args.lane_change_hz:.2f} Hz, internal)")
+    print(f"tracker reset = after {args.tracker_reset_frames} consecutive MISS")
 
     print(
         f"lane-change detector = "
-        f"baseline-shift "
-        f"(shift frac={lane_change_detector.cfg.min_total_shift_frac}, "
-        f"abs={lane_change_detector.cfg.min_total_shift_px}px, "
-        f"buf={lane_change_detector.cfg.baseline_buffer_len}, "
-        f"old_frac={lane_change_detector.cfg.baseline_old_frac}, "
+        f"baseline-shift on lane_center_x "
+        f"(shift frac={lane_change_detector.cfg.min_boundary_shift_frac}, "
+        f"abs={lane_change_detector.cfg.min_boundary_shift_px}px, "
+        f"smooth={lane_change_detector.cfg.smooth_window}, "
+        f"baseline={lane_change_detector.cfg.baseline_window}, "
         f"persist={lane_change_detector.cfg.persist_samples}, "
         f"alternation={lane_change_detector.cfg.enforce_alternation})"
     )
@@ -508,102 +390,50 @@ def main():
     writer = None
 
     if args.debug_video:
-
-        video_path = os.path.join(
-            args.outdir,
-            "annotated.mp4",
-        )
-
-        fourcc = cv2.VideoWriter_fourcc(
-            *"mp4v"
-        )
-
+        video_path = os.path.join(args.outdir, "annotated.mp4")
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         writer = cv2.VideoWriter(
-            video_path,
-            fourcc,
-            fps,
-            (
-                int(vr.info.width),
-                int(vr.info.height),
-            ),
+            video_path, fourcc, fps,
+            (int(vr.info.width), int(vr.info.height)),
         )
-
-        print(
-            f"[info] debug video:"
-            f" {video_path}"
-        )
+        print(f"[info] debug video: {video_path}")
 
     # ========================================================
     # PROCESSING LOOP
     # ========================================================
 
     t0 = _time.time()
-
     n = 0
-
     lane_ok_samples = 0
     lane_miss_samples = 0
-
     raw_sign_detections = 0
-
-    # --------------------------------------------------------
-    # Temporal tracker state (for LaneFitter)
-    # --------------------------------------------------------
 
     previous_left = None
     previous_right = None
-
     left_miss_count = 0
     right_miss_count = 0
 
-    # --------------------------------------------------------
-    # Every frame
-    # --------------------------------------------------------
+    for idx, ts, frame in vr.iter_frames(step=1):
 
-    for idx, ts, frame in vr.iter_frames(
-        step=1
-    ):
+        # ---- 1. HORIZON ----
+        horizon_y = horizon.detect(frame)
 
-        # ====================================================
-        # 1. HORIZON
-        # ====================================================
-
-        horizon_y = horizon.detect(
-            frame
+        # ---- 2. CANNY + ROI + HSV ----
+        edges_roi, _, _ = edges_module.compute(
+            frame,
+            top_y_override=horizon_y,
         )
 
-        # ====================================================
-        # 2. CANNY + ROI + HSV
-        # ====================================================
-
-        edges_roi, _, _ = (
-            edges_module.compute(
-                frame,
-                top_y_override=horizon_y,
-            )
-        )
-
-        # ====================================================
-        # 3. LANE FIT (with temporal tracking)
-        # ====================================================
-
+        # ---- 3. LANE FIT ----
         left, right = fitter.fit(
             edges_roi,
             previous_left=previous_left,
             previous_right=previous_right,
         )
 
-        # ====================================================
-        # 4. VALIDATION
-        # ====================================================
-
+        # ---- 4. VALIDATION ----
         h, w = frame.shape[:2]
-
-        y_range = (
-            int(h * 0.55),
-            int(h * 0.95),
-        )
-
+        y_range = (int(h * 0.55), int(h * 0.95))
         validation = validator.validate(
             left.coeffs,
             right.coeffs,
@@ -611,15 +441,8 @@ def main():
             w,
         )
 
-        # ====================================================
-        # 4b. UPDATE TRACKER (miss-counter reset)
-        # ====================================================
-
-        # ---- LEFT ----
-        if (
-            validation.left_ok
-            and left.coeffs is not None
-        ):
+        # ---- 4b. UPDATE TRACKER ----
+        if validation.left_ok and left.coeffs is not None:
             previous_left = left.coeffs.copy()
             left_miss_count = 0
         else:
@@ -628,11 +451,7 @@ def main():
                 previous_left = None
                 left_miss_count = 0
 
-        # ---- RIGHT ----
-        if (
-            validation.right_ok
-            and right.coeffs is not None
-        ):
+        if validation.right_ok and right.coeffs is not None:
             previous_right = right.coeffs.copy()
             right_miss_count = 0
         else:
@@ -641,74 +460,28 @@ def main():
                 previous_right = None
                 right_miss_count = 0
 
-        # ====================================================
-        # 5. TEMPORAL STATE
-        # ====================================================
-
-        (
-            l_coeffs,
-            l_status,
-            l_conf,
-        ), (
-            r_coeffs,
-            r_status,
-            r_conf,
-        ) = state.update(
-
-            left.coeffs
-            if validation.left_ok
-            else None,
-
-            left.confidence
-            if validation.left_ok
-            else 0.0,
-
-            right.coeffs
-            if validation.right_ok
-            else None,
-
-            right.confidence
-            if validation.right_ok
-            else 0.0,
+        # ---- 5. TEMPORAL STATE ----
+        (l_coeffs, l_status, l_conf), (r_coeffs, r_status, r_conf) = state.update(
+            left.coeffs if validation.left_ok else None,
+            left.confidence if validation.left_ok else 0.0,
+            right.coeffs if validation.right_ok else None,
+            right.confidence if validation.right_ok else 0.0,
         )
 
-        # ====================================================
-        # 6. COMPUTE EGO MEASUREMENT (shared)
-        # ====================================================
-
+        # ---- 6. EGO MEASUREMENT ----
         is_lc_step = (idx % lc_step == 0)
         is_ego_step = (idx % ego_step == 0)
 
         if is_lc_step:
+            measurement = ego.compute(l_coeffs, r_coeffs, w, h)
 
-            measurement = ego.compute(
-                l_coeffs,
-                r_coeffs,
-                w,
-                h,
-            )
-
-            l_usable = (
-                l_coeffs is not None
-                and l_status in ("OK", "HOLD")
-            )
-            r_usable = (
-                r_coeffs is not None
-                and r_status in ("OK", "HOLD")
-            )
+            l_usable = (l_coeffs is not None and l_status in ("OK", "HOLD"))
+            r_usable = (r_coeffs is not None and r_status in ("OK", "HOLD"))
             both_usable = l_usable and r_usable
 
-            if both_usable:
-                min_conf = float(min(l_conf, r_conf))
-            else:
-                min_conf = 0.0
-
-            # ------------------------------------------------
-            # Boundary x positions at ego eval row
-            # ------------------------------------------------
+            min_conf = float(min(l_conf, r_conf)) if both_usable else 0.0
 
             y_eval = int(ego.cfg.lane_eval_y_frac * h)
-
             left_x_eval = None
             right_x_eval = None
 
@@ -718,7 +491,6 @@ def main():
                     + l_coeffs[1] * y_eval
                     + l_coeffs[2]
                 )
-
             if r_coeffs is not None:
                 right_x_eval = float(
                     r_coeffs[0] * y_eval * y_eval
@@ -726,104 +498,61 @@ def main():
                     + r_coeffs[2]
                 )
 
-            # ------------------------------------------------
-            # Valid / invalid
-            # ------------------------------------------------
-
-            if (
-                both_usable
-                and measurement.valid
-                and min_conf >= MIN_CONF
-            ):
+            if both_usable and measurement.valid and min_conf >= MIN_CONF:
                 offset_px = measurement.offset_px
                 lane_width_px = measurement.lane_width_px
-
-                if lane_width_px is not None and lane_width_px != 0:
-                    offset_normalized = offset_px / lane_width_px
-                else:
-                    offset_normalized = None
-
+                offset_normalized = (
+                    offset_px / lane_width_px
+                    if (lane_width_px is not None and lane_width_px != 0)
+                    else None
+                )
                 status = "OK"
-
             else:
                 offset_px = None
                 lane_width_px = None
                 offset_normalized = None
                 status = "MISS"
 
-            # ------------------------------------------------
-            # Lane-change detector (internal, high-rate)
-            # ------------------------------------------------
-
+            # ---- Lane-change detection ----
             event = lane_change_detector.feed(
                 idx,
                 ts,
-                left_x_eval,
-                right_x_eval,
+                measurement.lane_center_x,
                 measurement.lane_width_px,
                 status,
             )
 
             if event is not None:
-
                 lane_change_csv.row(
                     f"{event.timestamp_s:.2f}",
                     event.frame,
                     event.direction,
                     f"{event.magnitude:.3f}",
                 )
-
                 print(
                     f"[LANE CHANGE] "
                     f"t={event.timestamp_s:.2f}s "
                     f"direction={event.direction} "
                     f"magnitude={event.magnitude:.1f}px "
-                    f"(dL={event.delta_left_px:+.1f}, "
-                    f"dR={event.delta_right_px:+.1f})"
+                    f"(shift={event.delta_left_px:+.1f})"
                 )
-
                 state.reset()
                 previous_left = None
                 previous_right = None
                 left_miss_count = 0
                 right_miss_count = 0
+                print("[LANE CHANGE] LaneState + tracker reset")
 
-                print(
-                    "[LANE CHANGE] "
-                    "LaneState + tracker reset"
-                )
-
-        # ====================================================
-        # 7. WRITE EGO CSV (1 Hz)
-        # ====================================================
-
+        # ---- 7. WRITE EGO CSV ----
         if is_ego_step:
-
-            # If we didn't run the measurement this frame
-            # (ego_step != lc_step alignment), compute it now.
             if not is_lc_step:
+                measurement = ego.compute(l_coeffs, r_coeffs, w, h)
 
-                measurement = ego.compute(
-                    l_coeffs,
-                    r_coeffs,
-                    w,
-                    h,
-                )
-
-                l_usable = (
-                    l_coeffs is not None
-                    and l_status in ("OK", "HOLD")
-                )
-                r_usable = (
-                    r_coeffs is not None
-                    and r_status in ("OK", "HOLD")
-                )
+                l_usable = (l_coeffs is not None and l_status in ("OK", "HOLD"))
+                r_usable = (r_coeffs is not None and r_status in ("OK", "HOLD"))
                 both_usable = l_usable and r_usable
 
-                if both_usable:
-                    min_conf = float(min(l_conf, r_conf))
-                else:
-                    min_conf = 0.0
+                min_conf = float(min(l_conf, r_conf)) if both_usable else 0.0
 
                 y_eval = int(ego.cfg.lane_eval_y_frac * h)
                 left_x_eval = None
@@ -835,7 +564,6 @@ def main():
                         + l_coeffs[1] * y_eval
                         + l_coeffs[2]
                     )
-
                 if r_coeffs is not None:
                     right_x_eval = float(
                         r_coeffs[0] * y_eval * y_eval
@@ -843,17 +571,14 @@ def main():
                         + r_coeffs[2]
                     )
 
-                if (
-                    both_usable
-                    and measurement.valid
-                    and min_conf >= MIN_CONF
-                ):
+                if both_usable and measurement.valid and min_conf >= MIN_CONF:
                     offset_px = measurement.offset_px
                     lane_width_px = measurement.lane_width_px
-                    if lane_width_px is not None and lane_width_px != 0:
-                        offset_normalized = offset_px / lane_width_px
-                    else:
-                        offset_normalized = None
+                    offset_normalized = (
+                        offset_px / lane_width_px
+                        if (lane_width_px is not None and lane_width_px != 0)
+                        else None
+                    )
                     status = "OK"
                 else:
                     offset_px = None
@@ -861,13 +586,11 @@ def main():
                     offset_normalized = None
                     status = "MISS"
 
-            # Counters
             if status == "OK":
                 lane_ok_samples += 1
             else:
                 lane_miss_samples += 1
 
-            # Write row
             ego_csv.row(
                 f"{ts:.2f}",
                 idx,
@@ -881,59 +604,29 @@ def main():
                 status,
             )
 
-        # ====================================================
-        # 8. SIGN DETECTION
-        # ====================================================
-
+        # ---- 8. SIGN DETECTION ----
         if (
             sign_detector is not None
             and sign_tracker is not None
             and args.sign_every > 0
             and idx % args.sign_every == 0
         ):
+            detections = sign_detector.detect(frame)
+            raw_sign_detections += len(detections)
+            sign_tracker.update(idx, ts, detections)
 
-            detections = sign_detector.detect(
-                frame
-            )
-
-            raw_sign_detections += len(
-                detections
-            )
-
-            sign_tracker.update(
-                idx,
-                ts,
-                detections,
-            )
-
-        # ====================================================
-        # 9. DEBUG VIDEO
-        # ====================================================
-
+        # ---- 9. DEBUG VIDEO ----
         if writer is not None:
-
             vis = frame.copy()
 
             if horizon_y is not None:
-                cv2.line(
-                    vis,
-                    (0, horizon_y),
-                    (w, horizon_y),
-                    (0, 255, 255),
-                    2,
-                )
+                cv2.line(vis, (0, horizon_y), (w, horizon_y), (0, 255, 255), 2)
 
             draw_curve(vis, l_coeffs, y_range, (0, 255, 255), 3)
             draw_curve(vis, r_coeffs, y_range, (0, 255, 0), 3)
 
             ego_x = int(0.50 * w)
-            cv2.line(
-                vis,
-                (ego_x, int(h * 0.75)),
-                (ego_x, int(h * 0.95)),
-                (255, 0, 0),
-                2,
-            )
+            cv2.line(vis, (ego_x, int(h * 0.75)), (ego_x, int(h * 0.95)), (255, 0, 0), 2)
 
             text_lines = [
                 f"L={l_status} R={r_status}",
@@ -944,32 +637,21 @@ def main():
 
             for i, text in enumerate(text_lines):
                 y = 25 + i * 23
-                cv2.putText(
-                    vis, text, (8, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55,
-                    (0, 0, 0), 4, cv2.LINE_AA,
-                )
-                cv2.putText(
-                    vis, text, (8, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55,
-                    (255, 255, 255), 2, cv2.LINE_AA,
-                )
+                cv2.putText(vis, text, (8, y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                            (0, 0, 0), 4, cv2.LINE_AA)
+                cv2.putText(vis, text, (8, y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                            (255, 255, 255), 2, cv2.LINE_AA)
 
             if sign_tracker is not None:
                 vis = sign_tracker.debug_render(vis, None)
 
             writer.write(vis)
 
-        # ====================================================
-        # FRAME COUNTER
-        # ====================================================
-
+        # ---- FRAME COUNTER ----
         n += 1
-
-        if (
-            args.max_frames is not None
-            and n >= args.max_frames
-        ):
+        if args.max_frames is not None and n >= args.max_frames:
             break
 
     # ========================================================
@@ -977,13 +659,9 @@ def main():
     # ========================================================
 
     finalized_signs = []
-
     if sign_tracker is not None:
-
         finalized_signs = sign_tracker.finalize()
-
         for track in finalized_signs:
-
             sign_csv.row(
                 f"{track.first_ts:.2f}",
                 track.first_frame,
@@ -1003,7 +681,6 @@ def main():
     ego_csv.close()
     lane_change_csv.close()
     sign_csv.close()
-
     vr.release()
 
     if writer is not None:
@@ -1019,13 +696,10 @@ def main():
     print("=" * 70)
     print("PIPELINE COMPLETE")
     print("=" * 70)
-
     print(f"frames processed = {n}")
     print(f"processing time  = {dt:.1f}s")
-
     if dt > 0:
         print(f"processing speed = {n / dt:.1f} FPS")
-
     print()
     print("Ego samples:")
     print(f"  OK   = {lane_ok_samples}")

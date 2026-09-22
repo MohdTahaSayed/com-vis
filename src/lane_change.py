@@ -9,22 +9,30 @@ import numpy as np
 
 @dataclass
 class LaneChangeConfig:
-    # --- Trigger 1: total shift from stable baseline ---
-    min_total_shift_frac: float = 0.25
-    min_total_shift_px: float = 90.0
+    # ----------------------------------------------------------
+    # v3-style baseline-shift detector on lane_center_x
+    # ----------------------------------------------------------
+    # A lane change fires when the smoothed lane centre x moves
+    # by more than `min_boundary_shift_frac * lane_width_px`
+    # (or `min_boundary_shift_px` if width unavailable) from a
+    # recent baseline, persisting for `persist_samples`.
+    #
+    # Direction:
+    #   lane centre moves RIGHT → direction = RIGHT
+    #   lane centre moves LEFT  → direction = LEFT
+    #
+    # (Verified against ground truth on VBOX0011_Trim.mp4.)
+    min_boundary_shift_frac: float = 0.30
+    min_boundary_shift_px: float = 90.0
 
-    # --- Baseline stability ---
-    # Long buffer holds many samples. Baseline = median of the
-    # OLDEST `baseline_old_frac` of that buffer.
-    baseline_buffer_len: int = 80
-    baseline_old_frac: float = 0.5
-
-    # Short smoothing for the "current" position
+    # Short smoothing window (samples)
     smooth_window: int = 3
 
-    # Persistence — total-shift condition must hold for this many
-    # consecutive samples before firing.
-    persist_samples: int = 3
+    # Baseline window (samples)
+    baseline_window: int = 5
+
+    # Persistence
+    persist_samples: int = 2
 
     # Cooldown
     cooldown_samples: int = 12
@@ -34,6 +42,7 @@ class LaneChangeConfig:
     lane_width_min_px: float = 100.0
     lane_width_max_px: float = 700.0
 
+    # Alternation filter — after LEFT, next must be RIGHT (and vice versa)
     enforce_alternation: bool = True
 
     @classmethod
@@ -52,18 +61,21 @@ class LaneChangeEvent:
     timestamp_s: float
     direction: str
     magnitude: float
-    delta_left_px: float
-    delta_right_px: float
+    delta_left_px: float        # signed shift of lane centre (kept for API compat)
+    delta_right_px: float       # always equals delta_left_px here
+    magnitude_diff_px: float    # always 0 here
 
 
 class LaneChangeDetector:
     """
-    Baseline-shift lane-change detector with a stable baseline.
+    v3-style lane-change detector on lane_center_x with alternation.
 
-    Baseline = median of the OLD portion of a long history buffer.
-    Current  = short median of recent samples.
-    Trigger  = both boundaries shifted by > threshold in same
-               direction, persisting for N samples.
+    Baseline = median of recent valid lane-centre samples.
+    Current  = smoothed median of the last few samples.
+    Shift    = current - baseline.
+
+    Fires when |shift| exceeds threshold, persists for N samples,
+    and alternates with the previous direction.
     """
 
     def __init__(self, cfg: LaneChangeConfig):
@@ -71,15 +83,10 @@ class LaneChangeDetector:
         self.reset()
 
     def reset(self):
-        self._smooth_left: Deque[float] = deque(maxlen=self.cfg.smooth_window)
-        self._smooth_right: Deque[float] = deque(maxlen=self.cfg.smooth_window)
-
-        self._buf_left: Deque[float] = deque(maxlen=self.cfg.baseline_buffer_len)
-        self._buf_right: Deque[float] = deque(maxlen=self.cfg.baseline_buffer_len)
-
+        self._smooth: Deque[float] = deque(maxlen=self.cfg.smooth_window)
+        self._history: Deque[float] = deque(maxlen=self.cfg.baseline_window)
         self._cooldown: int = 0
         self._last_direction: Optional[str] = None
-
         self._candidate_direction: Optional[str] = None
         self._candidate_count: int = 0
 
@@ -87,16 +94,13 @@ class LaneChangeDetector:
         self,
         frame: int,
         timestamp_s: float,
-        left_x: Optional[float],
-        right_x: Optional[float],
+        lane_center_x: Optional[float],
         lane_width_px: Optional[float],
         status: str,
     ) -> Optional[LaneChangeEvent]:
 
         # ---- GATES ----
-        if status != "OK":
-            return None
-        if left_x is None or right_x is None:
+        if status != "OK" or lane_center_x is None:
             return None
 
         if lane_width_px is not None:
@@ -107,62 +111,44 @@ class LaneChangeDetector:
                 return None
 
         # ---- SMOOTH ----
-        self._smooth_left.append(float(left_x))
-        self._smooth_right.append(float(right_x))
-
-        s_left = float(np.median(self._smooth_left))
-        s_right = float(np.median(self._smooth_right))
+        self._smooth.append(float(lane_center_x))
+        smoothed = float(np.median(self._smooth))
 
         # ---- COOLDOWN ----
         if self._cooldown > 0:
             self._cooldown -= 1
-            self._buf_left.append(s_left)
-            self._buf_right.append(s_right)
+            self._history.append(smoothed)
             self._candidate_direction = None
             self._candidate_count = 0
             return None
 
-        # ---- COMPUTE BASELINE ----
-        if len(self._buf_left) < 20:
-            # Not enough history yet
-            self._buf_left.append(s_left)
-            self._buf_right.append(s_right)
+        # ---- NEED HISTORY ----
+        if len(self._history) < self.cfg.baseline_window:
+            self._history.append(smoothed)
             return None
 
-        arr_l = np.array(self._buf_left)
-        arr_r = np.array(self._buf_right)
-
-        n = len(arr_l)
-        old_end = max(5, int(n * self.cfg.baseline_old_frac))
-
-        baseline_l = float(np.median(arr_l[:old_end]))
-        baseline_r = float(np.median(arr_r[:old_end]))
-
-        delta_l = s_left - baseline_l
-        delta_r = s_right - baseline_r
+        baseline = float(np.median(self._history))
 
         # ---- THRESHOLD ----
         if (
-            self.cfg.min_total_shift_frac > 0
+            self.cfg.min_boundary_shift_frac > 0
             and lane_width_px is not None
             and lane_width_px > 0
         ):
-            threshold = self.cfg.min_total_shift_frac * float(lane_width_px)
+            threshold = self.cfg.min_boundary_shift_frac * float(lane_width_px)
         else:
-            threshold = self.cfg.min_total_shift_px
+            threshold = self.cfg.min_boundary_shift_px
+
+        shift = smoothed - baseline
 
         # ---- CANDIDATE ----
-        same_sign = np.sign(delta_l) == np.sign(delta_r) and delta_l != 0
-        both_big = abs(delta_l) >= threshold and abs(delta_r) >= threshold
-
-        if not (same_sign and both_big):
-            self._buf_left.append(s_left)
-            self._buf_right.append(s_right)
+        if abs(shift) < threshold:
+            self._history.append(smoothed)
             self._candidate_direction = None
             self._candidate_count = 0
             return None
 
-        direction = "RIGHT" if delta_l > 0 else "LEFT"
+        direction = "RIGHT" if shift > 0 else "LEFT"
 
         # ---- PERSISTENCE ----
         if direction == self._candidate_direction:
@@ -172,8 +158,7 @@ class LaneChangeDetector:
             self._candidate_count = 1
 
         if self._candidate_count < self.cfg.persist_samples:
-            self._buf_left.append(s_left)
-            self._buf_right.append(s_right)
+            self._history.append(smoothed)
             return None
 
         # ---- ALTERNATION ----
@@ -182,8 +167,7 @@ class LaneChangeDetector:
             and self._last_direction is not None
             and direction == self._last_direction
         ):
-            self._buf_left.append(s_left)
-            self._buf_right.append(s_right)
+            self._history.append(smoothed)
             self._candidate_direction = None
             self._candidate_count = 0
             return None
@@ -193,20 +177,17 @@ class LaneChangeDetector:
             frame=frame,
             timestamp_s=timestamp_s,
             direction=direction,
-            magnitude=float(0.5 * (abs(delta_l) + abs(delta_r))),
-            delta_left_px=float(delta_l),
-            delta_right_px=float(delta_r),
+            magnitude=float(abs(shift)),
+            delta_left_px=float(shift),
+            delta_right_px=float(shift),
+            magnitude_diff_px=0.0,
         )
 
         self._last_direction = direction
         self._cooldown = self.cfg.cooldown_samples
 
-        # Clear history so the transition doesn't re-fire
-        self._buf_left.clear()
-        self._buf_right.clear()
-        self._buf_left.append(s_left)
-        self._buf_right.append(s_right)
-
+        self._history.clear()
+        self._history.append(smoothed)
         self._candidate_direction = None
         self._candidate_count = 0
 
