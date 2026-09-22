@@ -166,27 +166,18 @@ ego_position:
 # =====================================================================
 # Lane change detection
 # =====================================================================
+
 lane_change:
-
-  min_boundary_shift_frac: 0.30
-  min_boundary_shift_px: 90.0
-
-  smooth_window: 3
-  baseline_window: 6
-
-
-  persist_samples: 2
-
-
-  cooldown_samples: 12
-
+  min_total_shift_frac: 0.50         
+  min_total_shift_px: 180.0          
+  baseline_buffer_len: 100
+  baseline_old_frac: 0.6
+  smooth_window: 5                  
+  persist_samples: 4                
+  cooldown_samples: 20              
   min_confidence: 0.15
-
-
   lane_width_min_px: 100.0
   lane_width_max_px: 700.0
-
-  
   enforce_alternation: true
 
 # =====================================================================

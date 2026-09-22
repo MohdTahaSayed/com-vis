@@ -15,6 +15,8 @@ class EgoPositionCSV:
             "lane_width_px",
             "offset_normalized",
             "lane_center_x",
+            "left_x_eval",
+            "right_x_eval",
             "confidence",
             "status",
         ])
@@ -27,6 +29,8 @@ class EgoPositionCSV:
         lane_width_px,
         offset_normalized,
         lane_center_x,
+        left_x_eval,
+        right_x_eval,
         confidence,
         status,
     ):
@@ -37,6 +41,8 @@ class EgoPositionCSV:
             lane_width_px,
             offset_normalized,
             lane_center_x,
+            left_x_eval,
+            right_x_eval,
             confidence,
             status,
         ])
