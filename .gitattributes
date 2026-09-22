@@ -1,1 +1,38 @@
-*.zip filter=lfs diff=lfs merge=lfs -text
+# Auto detect text files and normalize line endings
+* text=auto
+
+# Python files
+*.py text eol=lf
+*.pyi text eol=lf
+
+# YAML config
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# Markdown docs
+*.md text eol=lf
+
+# Requirements
+*.txt text eol=lf
+
+# Shell scripts
+*.sh text eol=lf
+
+# Batch files
+*.bat text eol=crlf
+
+# Binary files — never touch
+*.pt binary
+*.pth binary
+*.onnx binary
+*.mp4 binary
+*.avi binary
+*.mov binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+
+# Notebooks — strip output for cleaner diffs
+*.ipynb filter=git-clean diff=ipynb

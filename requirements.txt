@@ -1,5 +1,11 @@
-﻿opencv-python==5.0.0.93
-numpy==2.4.6
-scipy==1.17.1
-pyyaml==6.0.3
-ultralytics==8.4.150
+﻿# Core computer vision
+opencv-python==4.10.0.84
+numpy==1.26.4
+scipy==1.13.1
+PyYAML==6.0.2
+
+# Deep learning (sign detection)
+ultralytics==8.2.103
+torch>=2.2.0
+torchvision>=0.17.0
+

@@ -1,28 +1,74 @@
-# Data videos
-data/**/*.mp4
-data/**/*.avi
-data/**/*.mov
-
-# Python
+# ---- Python ----
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.venv/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ---- Virtual environments ----
 venv/
+.venv/
 env/
+ENV/
+env.bak/
+venv.bak/
+.python-version
 
-# Outputs
-outputs/
-outputs_*/
+# ---- Testing / coverage ----
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
 
-# Frames
-frames/
+# ---- Jupyter ----
+.ipynb_checkpoints/
 
-# OS
+# ---- IDE / editors ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 .DS_Store
 Thumbs.db
 
-# IDE
-.vscode/
-.idea/
+# ---- Project outputs (large, regeneratable) ----
+outputs/
+outputs_normalized/
+outputs_*/
+frames/
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# ---- Data (large, not committed) ----
+data/
+*.pt
+*.pth
+*.onnx
+
+# ---- Logs / temp ----
+*.log
+*.tmp
+combined_code.txt
+FINAL_CODE.txt
