@@ -180,24 +180,21 @@ sign_detect:
   imgsz: 640
   device: cpu
 
-  min_bbox_px: 25
-  max_bbox_px: 150       
-  tile_min_bbox_frac: 0.15   
-  tile_max_bbox_frac: 0.60   
+  min_bbox_px: 15
+  max_bbox_px: 300
 
   artifact_x1: 0.64
   artifact_y1: 0.60
   artifact_x2: 0.75
   artifact_y2: 0.72
 
-  # --- Tiled inference (fixes domain mismatch) ---
   tiling_enabled: true
   tile_rows: 2
   tile_cols: 3
   tile_overlap_frac: 0.20
   tile_conf_threshold: 0.20
-  tile_min_bbox_frac: 0.05
-  tile_max_bbox_frac: 0.95
+  tile_min_bbox_frac: 0.15
+  tile_max_bbox_frac: 0.60
 
 # =====================================================================
 # Sign tracking
